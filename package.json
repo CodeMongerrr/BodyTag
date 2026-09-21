@@ -1,0 +1,39 @@
+{
+  "name": "bodytag",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Open-source campaign engine for walking-billboard sponsorships",
+  "license": "AGPL-3.0-or-later",
+  "packageManager": "pnpm@10.32.1",
+  "scripts": {
+    "dev": "pnpm --filter db generate && concurrently -n web,img,rt -c cyan,magenta,yellow \"pnpm --filter web dev\" \"pnpm --filter worker-images start\" \"pnpm --filter worker-realtime start\"",
+    "dev:web": "pnpm --filter web dev",
+    "build": "pnpm --filter db generate && pnpm --filter web build",
+    "db:generate": "pnpm --filter db generate",
+    "db:migrate": "pnpm --filter db migrate",
+    "db:push": "pnpm --filter db push",
+    "db:seed": "pnpm --filter db seed",
+    "db:studio": "pnpm --filter db studio",
+    "worker:images": "pnpm --filter worker-images start",
+    "worker:realtime": "pnpm --filter worker-realtime start",
+    "lint": "pnpm --filter web lint"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "prisma",
+      "sharp",
+      "esbuild",
+      "msgpackr-extract",
+      "unrs-resolver"
+    ]
+  },
+  "dependencies": {
+    "@neon/config": "^1.7.2",
+    "@neon/env": "^1.4.3"
+  }
+}

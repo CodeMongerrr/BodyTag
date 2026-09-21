@@ -1,0 +1,24 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bodytag-worker-realtime
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bodytag-worker-realtime
+  template:
+    metadata:
+      labels:
+        app: bodytag-worker-realtime
+    spec:
+      containers:
+        - name: worker
+          image: ghcr.io/bodytag/worker-realtime:latest
+          envFrom:
+            - secretRef:
+                name: bodytag-env
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 9092

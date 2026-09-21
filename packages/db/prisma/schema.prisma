@@ -1,0 +1,272 @@
+// Driver adapters (@prisma/adapter-pg, used on Cloudflare Workers via Hyperdrive) are GA in Prisma 6.19;
+// the old `previewFeatures = ["driverAdapters"]` flag is deprecated and must not be set.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum CampaignTheme {
+  photo
+  arena
+}
+
+enum CampaignStatus {
+  draft
+  live
+  paused
+  closed
+  fulfilled
+}
+
+enum BidStatus {
+  intent
+  settled
+  outbid
+  refunded
+  credited
+}
+
+enum StakeStatus {
+  held
+  captured
+  refunded
+}
+
+enum ImageJobStatus {
+  queued
+  running
+  done
+  failed
+}
+
+model User {
+  id              String     @id @default(cuid())
+  email           String     @unique
+  handle          String     @unique
+  name            String
+  passwordHash    String
+  phone           String?
+  kycTier         Int        @default(0)
+  verified        Boolean    @default(false)
+  socialX         String?
+  socialInstagram String?
+  profilePhotoKey String?
+  processor       String     @default("mock")
+  processorPublic String?
+  processorSecret String?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  campaigns       Campaign[]
+  stakes          Stake[]
+  kycChecks       KycCheck[]
+}
+
+model Wallet {
+  id                 String   @id @default(cuid())
+  email              String   @unique
+  balanceCents       Int      @default(0)
+  currency           String   @default("USD")
+  provider           String   @default("mock")
+  providerCustomerId String?
+  updatedAt          DateTime @updatedAt
+}
+
+model Campaign {
+  id              String          @id @default(cuid())
+  creatorId       String
+  creator         User            @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  slug            String
+  title           String
+  theme           CampaignTheme
+  status          CampaignStatus  @default(draft)
+  eventName       String
+  eventDate       DateTime
+  eventCity       String
+  affiliationNote String          @default("Not an official event ticket or endorsement. You are buying advertising on this creator's BodyTag page.")
+  closeAt         DateTime
+  targetTotalCents Int?
+  currency        String          @default("USD")
+  socialLinks     Json            @default("{}")
+  arenaConfig     Json            @default("{}")
+  vetoList        Json            @default("[]")
+  shortCode       String          @unique
+  previewSecret   String          @unique
+  pausedReason    String?
+  raisedCents     Int             @default(0)
+  gmvCents        Int             @default(0)
+  accruedFeeCents Int             @default(0)
+  soundtrackKey   String?
+  eventProofKey   String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  surfaces        Surface[]
+  slots           Slot[]
+  bids            Bid[]
+  stakes          Stake[]
+  imageJobs       ImageJob[]
+  tickets         SupportTicket[]
+  reports         Report[]
+
+  @@unique([creatorId, slug])
+  @@index([status, closeAt])
+}
+
+model Surface {
+  id         String    @id @default(cuid())
+  campaignId String
+  campaign   Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  kind       String
+  objectKey  String
+  label      String
+  sortOrder  Int       @default(0)
+  width      Int?
+  height     Int?
+  meta       Json?
+  slots      Slot[]
+}
+
+model Slot {
+  id                String   @id @default(cuid())
+  campaignId        String
+  campaign          Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  surfaceId         String
+  surface           Surface  @relation(fields: [surfaceId], references: [id], onDelete: Cascade)
+  name              String
+  startPriceCents   Int
+  currentPriceCents Int
+  rect              Json?
+  marker            Json?
+  sizeNote          String?
+  hyroxCm           Int?
+  currentBidId      String?
+  viewCount         Int      @default(0)
+  status            String   @default("open")
+  sortOrder         Int      @default(0)
+  bids              Bid[]
+}
+
+model Bid {
+  id                 String    @id @default(cuid())
+  slotId             String
+  slot               Slot      @relation(fields: [slotId], references: [id], onDelete: Cascade)
+  campaignId         String
+  campaign           Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  brandEmail         String
+  brandName          String
+  amountCents        Int
+  expectedPriceCents Int
+  status             BidStatus @default(intent)
+  paymentId          String?
+  checkoutSessionId  String?
+  magicToken         String    @unique
+  createdAt          DateTime  @default(now())
+  settledAt          DateTime?
+  creative           Creative?
+}
+
+model Creative {
+  id       String  @id @default(cuid())
+  bidId    String  @unique
+  bid      Bid     @relation(fields: [bidId], references: [id], onDelete: Cascade)
+  logoKey  String
+  tagline  String?
+  url      String?
+  qrUrl    String?
+  xHandle  String?
+}
+
+model Stake {
+  id             String         @id @default(cuid())
+  creatorId      String
+  creator        User           @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  campaignId     String
+  campaign       Campaign       @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  amountCents    Int
+  depositedCents Int
+  capturedCents  Int            @default(0)
+  refundedCents  Int            @default(0)
+  status         StakeStatus    @default(held)
+  ledger         StakeLedger[]
+
+  @@unique([campaignId])
+}
+
+model StakeLedger {
+  id          String   @id @default(cuid())
+  stakeId     String
+  stake       Stake    @relation(fields: [stakeId], references: [id], onDelete: Cascade)
+  type        String
+  amountCents Int
+  gmvSnapshot Int?
+  note        String?
+  createdAt   DateTime @default(now())
+}
+
+model ImageJob {
+  id             String          @id @default(cuid())
+  campaignId     String
+  campaign       Campaign        @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  bidId          String?
+  variant        String
+  status         ImageJobStatus  @default(queued)
+  outputKey      String?
+  idempotencyKey String          @unique
+  error          String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+}
+
+model KycCheck {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tier      Int
+  status    String
+  provider  String
+  payload   Json
+  createdAt DateTime @default(now())
+}
+
+model SupportTicket {
+  id         String    @id @default(cuid())
+  kind       String
+  campaignId String?
+  campaign   Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  slotId     String?
+  paymentId  String?
+  email      String
+  body       String
+  status     String    @default("open")
+  macro      String?
+  createdAt  DateTime  @default(now())
+}
+
+model Report {
+  id         String   @id @default(cuid())
+  campaignId String
+  campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  email      String?
+  reason     String
+  createdAt  DateTime @default(now())
+}
+
+model MagicLink {
+  id        String   @id @default(cuid())
+  email     String
+  token     String   @unique
+  purpose   String
+  expiresAt DateTime
+  bidId     String?
+}
+
+model CircuitState {
+  id        String    @id @default("payments")
+  state     String    @default("closed")
+  failures  Int       @default(0)
+  openedAt  DateTime?
+  updatedAt DateTime  @updatedAt
+}

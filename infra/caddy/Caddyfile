@@ -1,0 +1,9 @@
+bodytag.example.com {
+  encode gzip zstd
+  reverse_proxy web:3000
+}
+
+# Optional short host for tweets. Point btag.example.com here.
+btag.example.com {
+  reverse_proxy web:3000
+}

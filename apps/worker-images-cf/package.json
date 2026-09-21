@@ -1,0 +1,26 @@
+{
+  "name": "worker-images-cf",
+  "version": "0.1.0",
+  "private": true,
+  "license": "AGPL-3.0-or-later",
+  "scripts": {
+    "dev": "wrangler dev",
+    "typecheck": "tsc --noEmit",
+    "deploy": "wrangler deploy",
+    "cf:types": "wrangler types"
+  },
+  "dependencies": {
+    "@bodytag/db": "workspace:*",
+    "@bodytag/shared": "workspace:*",
+    "@prisma/adapter-pg": "6.19.3",
+    "@prisma/client": "^6.16.2",
+    "@resvg/resvg-wasm": "^2.6.2",
+    "dejavu-fonts-ttf": "^2.37.3",
+    "pg": "^8.23.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260920.1",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.135.0"
+  }
+}

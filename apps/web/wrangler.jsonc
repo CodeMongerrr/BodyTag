@@ -1,0 +1,40 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // Hosted instance runs in the Sarvix Cloudflare account.
+  "account_id": "7a5ce349fb4c8144ef31e7d7e525053b",
+  "name": "bodytag-web",
+  // Custom entry: re-exports the OpenNext worker and adds BodyTag's Durable Objects (src/lib/realtime).
+  "main": "./worker.ts",
+  "compatibility_date": "2026-09-16",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": { "directory": ".open-next/assets", "binding": "ASSETS" },
+  "observability": { "enabled": true },
+  "services": [{ "binding": "WORKER_SELF_REFERENCE", "service": "bodytag-web" }],
+  "r2_buckets": [{ "binding": "R2", "bucket_name": "bodytag" }],
+  // Postgres lives outside Cloudflare (Neon etc.); Hyperdrive pools it. Create with:
+  //   wrangler hyperdrive create bodytag-db --connection-string="postgres://…"
+  // then paste the id below.
+  "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "36892d3fee584112909baadb14bc9786", "localConnectionString": "postgresql://bodytag:bodytag@localhost:5432/bodytag" }],
+  "durable_objects": {
+    "bindings": [
+      { "name": "CAMPAIGN_HUB", "class_name": "CampaignHub" },
+      { "name": "RATE_LIMITER", "class_name": "RateLimiter" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["CampaignHub", "RateLimiter"] }],
+  "queues": { "producers": [{ "binding": "IMAGE_QUEUE", "queue": "bodytag-images" }] },
+  "vars": {
+    "BODYTAG_RUNTIME": "cloudflare",
+    "NODE_ENV": "production",
+    "STORAGE_DRIVER": "r2",
+    "PAYMENT_PROVIDER": "mock",
+    "ALLOW_MOCK_PAYMENTS": "true",
+    "HOSTED_FEE_BPS": "100",
+    "REQUIRE_STAKE": "true",
+    "ENABLE_MARKETPLACE_GRID": "true",
+    "NEXT_PUBLIC_AVATURN_SUBDOMAIN": "demo",
+    "APP_URL": "https://bodytag-web.saarvix786.workers.dev",
+    "SHORT_URL": "https://bodytag-web.saarvix786.workers.dev"
+  }
+  // Secrets (wrangler secret put): SESSION_SECRET, DODO_API_KEY, DODO_WEBHOOK_SECRET
+}

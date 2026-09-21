@@ -1,0 +1,26 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "bodytag",
+  "account_id": "1d1df72d00eae93d53a47f03bbed2750",
+  "main": "worker.ts",
+  "compatibility_date": "2026-09-16",
+  "r2_buckets": [
+    {
+      "binding": "R2",
+      "bucket_name": "bodytag"
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "bodytag",
+      "database_id": "d9da25cf-12da-497d-b1b7-ba46dccfa201"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "PRESENCE",
+      "id": "74ec43b72c3d476ea802d214ccb8896f"
+    }
+  ]
+}

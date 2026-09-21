@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // Hosted instance runs in the Sarvix Cloudflare account. Consumes the queue apps/web produces to
+  // (IMAGE_QUEUE) and renders the OG / square / story / print / slot_crop images with resvg-wasm.
+  "account_id": "7a5ce349fb4c8144ef31e7d7e525053b",
+  "name": "bodytag-images",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-16",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "r2_buckets": [{ "binding": "R2", "bucket_name": "bodytag" }],
+  // Same Hyperdrive config as apps/web/wrangler.jsonc — paste the id from `wrangler hyperdrive create`.
+  "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "36892d3fee584112909baadb14bc9786", "localConnectionString": "postgresql://bodytag:bodytag@localhost:5432/bodytag" }],
+  "queues": {
+    "consumers": [{ "queue": "bodytag-images", "max_batch_size": 1, "max_retries": 5, "max_batch_timeout": 5 }]
+  },
+  // The bundled TTF is imported as raw bytes; .wasm is handled by wrangler's built-in CompiledWasm rule.
+  "rules": [{ "type": "Data", "globs": ["**/*.ttf"], "fallthrough": true }]
+}

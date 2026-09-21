@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bodytag-worker-images
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bodytag-worker-images
+  template:
+    metadata:
+      labels:
+        app: bodytag-worker-images
+    spec:
+      containers:
+        - name: worker
+          image: ghcr.io/bodytag/worker-images:latest
+          envFrom:
+            - secretRef:
+                name: bodytag-env
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 9091
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: bodytag-worker-images
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: bodytag-worker-images
+  minReplicas: 1
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 75
