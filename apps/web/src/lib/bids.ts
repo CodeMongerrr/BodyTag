@@ -34,6 +34,13 @@ export async function createBidIntent(input: {
   xHandle?: string;
   expectedPriceCents: number;
 }) {
+  const brandName = input.brandName.trim();
+  const brandEmail = input.brandEmail.trim().toLowerCase();
+  if (!brandName || brandName.length > 120) throw new BidError("Enter your brand name (120 characters max).", "invalid_brand");
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(brandEmail)) throw new BidError("Enter a valid email for your receipt.", "invalid_email");
+  if (!input.logoKey) throw new BidError("A logo is required.", "invalid_logo");
+  input = { ...input, brandName, brandEmail };
+
   const blocked =
     moderateText(input.brandName) ||
     moderateText(input.tagline ?? "") ||
@@ -52,6 +59,11 @@ export async function createBidIntent(input: {
     include: { creator: true },
   });
   if (campaign.status !== "live") throw new BidError("This auction is not live", "not_live");
+  // A creator buying their own slots would inflate GMV (and the hosted fee base) with money that never leaves them.
+  if (brandEmail === campaign.creator.email.toLowerCase()) {
+    throw new BidError("Creators can't buy slots on their own campaign.", "own_campaign");
+  }
+  if (campaign.closeAt.getTime() <= Date.now()) throw new BidError("This auction has closed.", "closed");
   if (vetos(campaign).some((v) => input.brandName.toLowerCase().includes(v))) {
     throw new BidError("This brand is on the creator veto list", "veto");
   }
@@ -59,8 +71,17 @@ export async function createBidIntent(input: {
   if (!(await paymentAvailable())) throw new PaymentUnavailableError();
 
   const slot = await prisma.slot.findUniqueOrThrow({ where: { id: input.slotId } });
+  // The slot must belong to the campaign whose status/veto list/currency we just validated.
+  if (slot.campaignId !== campaign.id) throw new BidError("That slot is not part of this campaign.", "bad_slot");
   if (slot.currentPriceCents !== input.expectedPriceCents) {
     throw new BidError("Price moved. Refresh and try the new takeover amount.", "price_moved");
+  }
+
+  if (slot.currentBidId) {
+    const current = await prisma.bid.findUnique({ where: { id: slot.currentBidId }, select: { brandEmail: true, status: true } });
+    if (current?.status === "settled" && current.brandEmail === brandEmail) {
+      throw new BidError("You already own this slot. Update your logo from the sponsor portal instead.", "already_owner");
+    }
   }
 
   const bid = await prisma.bid.create({
@@ -92,8 +113,12 @@ export async function createBidIntent(input: {
       currency: campaign.currency,
     });
     if (debit.ok) {
-      await settleBid({ bidId: bid.id, paymentId: debit.paymentId ?? `wallet_${bid.id}` });
+      const settled = await settleBid({ bidId: bid.id, paymentId: debit.paymentId ?? `wallet_${bid.id}` });
       await recordPaymentSuccess();
+      // settleBid credits the wallet back when someone else took the slot first; do not report that as a win.
+      if (settled.status !== "settled") {
+        throw new BidError("Someone took this slot a moment ago. Your wallet was credited back; try the new price.", "price_moved");
+      }
       return { bid, settled: true as const, checkoutUrl: null as string | null };
     }
     const checkout = await payments.createBidCheckout({
@@ -113,7 +138,7 @@ export async function createBidIntent(input: {
     await recordPaymentSuccess();
     return { bid, settled: false as const, checkoutUrl: checkout.checkoutUrl };
   } catch (e) {
-    await recordPaymentFailure();
+    if (!(e instanceof BidError)) await recordPaymentFailure();
     throw e;
   }
 }

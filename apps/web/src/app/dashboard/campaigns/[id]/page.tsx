@@ -3,6 +3,7 @@ import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { CampaignEditor } from "@/components/campaign-editor";
 import { canPublish } from "@/lib/stake";
+import { appConfig } from "@/lib/config";
 
 export default async function CampaignEditPage({ params }: { params: Promise<{ id: string }> }) {
   let user;
@@ -22,6 +23,8 @@ export default async function CampaignEditPage({ params }: { params: Promise<{ i
     <CampaignEditor
       handle={user.handle}
       minStake={stake.min}
+      feeBps={appConfig.hostedFeeBps}
+      requireStake={appConfig.requireStake}
       campaign={{
         id: campaign.id,
         title: campaign.title,
