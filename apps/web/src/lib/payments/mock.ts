@@ -1,5 +1,5 @@
 import { prisma } from "../db";
-import type { BidCheckoutInput, Money, PaymentAdapter } from "./adapter";
+import type { BidCheckoutInput, Money, PaymentAdapter, StakeCheckoutInput } from "./adapter";
 import { appConfig } from "../config";
 
 export class MockAdapter implements PaymentAdapter {
@@ -7,6 +7,10 @@ export class MockAdapter implements PaymentAdapter {
     const sessionId = `mock_${input.bidId}`;
     const checkoutUrl = `${appConfig.appUrl}/api/payments/mock/complete?session=${sessionId}&bid=${input.bidId}`;
     return { checkoutUrl, sessionId };
+  }
+
+  async createStakeCheckout(_input: StakeCheckoutInput) {
+    return null;
   }
 
   async refund(_paymentId: string, _reason: string) {

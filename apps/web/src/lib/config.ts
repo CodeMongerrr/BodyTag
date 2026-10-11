@@ -13,6 +13,9 @@ export const appConfig = {
   dodoWebhookSecret: process.env.DODO_WEBHOOK_SECRET ?? "",
   stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET ?? "",
   dodoEnv: process.env.DODO_ENVIRONMENT ?? "test_mode",
+  // Pay-what-you-want products created once in the Dodo dashboard: one for sponsor slot purchases, one for Stake top-ups.
+  dodoBidProductId: process.env.DODO_BID_PRODUCT_ID ?? "",
+  dodoStakeProductId: process.env.DODO_STAKE_PRODUCT_ID ?? "",
   // Comma-separated Dodo payment_method_types shown at checkout. Empty = launch defaults (see lib/payments/methods.ts).
   dodoPaymentMethods: process.env.DODO_PAYMENT_METHODS ?? "",
   // Live-mode bids on the single platform Dodo key mean BodyTag collects brand money, which contradicts the Terms and

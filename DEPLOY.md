@@ -82,6 +82,17 @@ A 60k-visitor / 48h campaign is mostly CDN if thumbs are cached. Always Draco-co
 
 `SESSION_SECRET` must be a random string of 16+ characters in production. The app refuses to sign or verify session cookies with the built-in development default, because anyone could forge a login with it. On Cloudflare: `wrangler secret put SESSION_SECRET`. Also set `DODO_API_KEY` / `DODO_WEBHOOK_SECRET` (or `STRIPE_WEBHOOK_SECRET`) before taking real payments.
 
+## Dodo Payments setup
+
+1. In the Dodo dashboard create two **pay-what-you-want** products (USD): one for sponsor slots, one for Stake top-ups. Copy their ids to `DODO_BID_PRODUCT_ID` and `DODO_STAKE_PRODUCT_ID`.
+2. Create an API key and a webhook endpoint pointing at `<APP_URL>/api/payments/dodo/webhook`. Subscribe to `payment.succeeded`, `payment.failed`, `refund.*` and `dispute.*`. Store the signing secret as `DODO_WEBHOOK_SECRET`.
+3. Set `PAYMENT_PROVIDER=dodo`, `DODO_ENVIRONMENT=test_mode` and the secrets (`wrangler secret put DODO_API_KEY`, `DODO_WEBHOOK_SECRET`). Run a test-mode slot purchase and a Stake top-up end to end.
+4. Live money is blocked by design: bid checkout in `live_mode` is refused until bids settle on creator-owned Dodo accounts (`ALLOW_PLATFORM_COLLECTED_BIDS`, see `docs/compliance/launch-matrix.md`).
+
+Stake top-ups are charged on the platform key; the webhook credits them idempotently (unique `StakeLedger.paymentId`). Disputes and refunds open an operator ticket (`payment_dispute` / `payment_refund`) linked to the bid.
+
+Schema changes since the first deploy (`User.termsAcceptedAt/termsVersion`, `StakeLedger.paymentId`) are additive; run `pnpm db:push` against the production database **before** deploying the new code.
+
 ## Feature flags
 
 | Variable | Self-host default | Hosted |

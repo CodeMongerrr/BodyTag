@@ -205,6 +205,8 @@ model StakeLedger {
   amountCents Int
   gmvSnapshot Int?
   note        String?
+  // Processor payment that funded a deposit; unique so a redelivered webhook can never credit the Stake twice.
+  paymentId   String?  @unique
   createdAt   DateTime @default(now())
 }
 

@@ -13,7 +13,18 @@ export type BidCheckoutInput = {
   termsVersion?: string;
 };
 
+export type StakeCheckoutInput = {
+  campaignId: string;
+  creatorId: string;
+  creatorEmail: string;
+  amountCents: number;
+  currency: string;
+  returnUrl: string;
+};
+
 export interface PaymentAdapter {
+  /** Charge a creator for a Stake top-up. Resolves null when the adapter takes no real payment (mock): the caller credits directly. */
+  createStakeCheckout(input: StakeCheckoutInput): Promise<{ checkoutUrl: string; sessionId: string } | null>;
   createBidCheckout(input: BidCheckoutInput): Promise<{ checkoutUrl: string; sessionId: string }>;
   refund(paymentId: string, reason: string): Promise<void>;
   creditWallet(customerId: string, amount: Money): Promise<void>;

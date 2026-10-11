@@ -12,6 +12,7 @@ import { appConfig } from "@/lib/config";
 import { clearSession, createSession, requireUser } from "@/lib/auth";
 import { handleAllowed, assertCanPublish, submitKyc } from "@/lib/kyc";
 import { MAX_STAKE_CENTS, canPublish, captureAndRefundStake, depositStake, enforceMargin } from "@/lib/stake";
+import { getPayments } from "@/lib/payments";
 import { BidError, createBidIntent } from "@/lib/bids";
 import { PaymentUnavailableError } from "@/lib/circuit";
 import { allowByIp, clientIp } from "@/lib/http";
@@ -433,6 +434,16 @@ export async function depositStakeAction(formData: FormData) {
     return { error: "Stake top-ups are limited to $100,000 at a time." };
   }
   if (!isIn(["draft", "live", "paused"], campaign.status)) return { error: "This campaign is finished; Stake can no longer be topped up." };
+  // Real processors charge first and the webhook credits the Stake; the mock adapter takes no payment and returns null.
+  const checkout = await getPayments().createStakeCheckout({
+    campaignId,
+    creatorId: user.id,
+    creatorEmail: user.email,
+    amountCents: Math.round(dollars * 100),
+    currency: campaign.currency,
+    returnUrl: `${appConfig.appUrl}/dashboard/campaigns/${campaignId}?stake=pending`,
+  });
+  if (checkout) redirect(checkout.checkoutUrl);
   await depositStake({
     campaignId,
     creatorId: user.id,

@@ -46,4 +46,4 @@ Subject: BodyTag: digital ad slots, prepaid hosted fee, and credits (please conf
 
 ## Webhook security
 
-`payment.succeeded` is signature-checked (HMAC over `id.timestamp.body`, 5-minute window) and now also checked for amount and currency before a bid settles. Still to do: handle `dispute.*` and `refund.*`, and reconcile any bid left in `intent` after a mismatch.
+`payment.succeeded` is signature-checked (HMAC over `id.timestamp.body`, 5-minute window) and now also checked for amount and currency before a bid settles. `dispute.*` and `refund.*` events open an operator ticket linked to the bid. Stake top-ups are charged through the Stake product and credited once per payment id. Still to do: automatic slot pause on `dispute.opened`, and reconciling any bid left in `intent` after an amount mismatch.

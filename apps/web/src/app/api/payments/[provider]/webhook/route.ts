@@ -4,6 +4,7 @@ import { BidError, settleBid } from "@/lib/bids";
 import { appConfig } from "@/lib/config";
 import { prisma } from "@/lib/db";
 import { checkPaymentCoversBid } from "@/lib/payments/verify";
+import { depositStake } from "@/lib/stake";
 
 function timingSafeEqualStr(a: string, b: string): boolean {
   if (typeof a !== "string" || typeof b !== "string") return false;
@@ -103,6 +104,65 @@ async function settleFromWebhook(bidId: string, paymentId: string) {
   }
 }
 
+type DodoEventData = {
+  metadata?: Record<string, string>;
+  payment_id?: string;
+  total_amount?: unknown;
+  currency?: unknown;
+  refund_id?: string;
+  dispute_id?: string;
+  dispute_status?: string;
+};
+
+/** Disputes and refunds change money we already booked: open an operator ticket linked to the bid, once per delivery. */
+async function recordPaymentIncident(type: string, data: DodoEventData, webhookId: string | null) {
+  const marker = `[${webhookId ?? `${type}:${data.payment_id ?? data.refund_id ?? data.dispute_id ?? "unknown"}`}]`;
+  const existing = await prisma.supportTicket.findFirst({ where: { body: { startsWith: marker } }, select: { id: true } });
+  if (existing) return;
+  const bid = data.payment_id
+    ? await prisma.bid.findFirst({ where: { paymentId: data.payment_id }, select: { id: true, campaignId: true, slotId: true, brandEmail: true } })
+    : null;
+  await prisma.supportTicket.create({
+    data: {
+      kind: type.startsWith("dispute") ? "payment_dispute" : "payment_refund",
+      campaignId: bid?.campaignId ?? null,
+      slotId: bid?.slotId ?? null,
+      paymentId: data.payment_id ?? null,
+      email: bid?.brandEmail ?? appConfig.supportEmail,
+      body: `${marker} Dodo event ${type}. payment=${data.payment_id ?? "?"} refund=${data.refund_id ?? "-"} dispute=${data.dispute_id ?? "-"} status=${data.dispute_status ?? "-"}. Review the slot and reconcile the ledger by hand.`,
+    },
+  });
+}
+
+/** payment.succeeded for a Stake top-up: verify, then credit idempotently (one ledger row per payment id). */
+async function creditStakeTopup(data: DodoEventData): Promise<{ credited: boolean; reason?: string }> {
+  const meta = data.metadata ?? {};
+  const amountCents = Number(meta.amount_cents);
+  if (!meta.campaign_id || !meta.creator_id || !data.payment_id || !Number.isInteger(amountCents) || amountCents <= 0) {
+    return { credited: false, reason: "bad_metadata" };
+  }
+  const check = checkPaymentCoversBid(
+    { totalAmount: data.total_amount, currency: data.currency },
+    { amountCents, currency: meta.currency || "USD" },
+  );
+  if (!check.ok) return { credited: false, reason: check.reason };
+  const campaign = await prisma.campaign.findUnique({ where: { id: meta.campaign_id }, include: { creator: true } });
+  if (!campaign || campaign.creatorId !== meta.creator_id) return { credited: false, reason: "unknown_campaign" };
+  if (campaign.status === "closed" || campaign.status === "fulfilled") {
+    // Stake was already settled; crediting now would strand the money. Flag it for a manual refund.
+    await recordPaymentIncident("stake_topup.after_settlement", data, `stake-late:${data.payment_id}`);
+    return { credited: false, reason: "campaign_settled" };
+  }
+  await depositStake({
+    campaignId: campaign.id,
+    creatorId: campaign.creatorId,
+    creatorEmail: campaign.creator.email,
+    amountCents,
+    paymentId: data.payment_id,
+  });
+  return { credited: true };
+}
+
 export async function POST(req: Request, { params }: { params: Promise<{ provider: string }> }) {
   const { provider } = await params;
   const rawBody = await req.text();
@@ -121,12 +181,20 @@ export async function POST(req: Request, { params }: { params: Promise<{ provide
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const type = (payload as { type?: string }).type;
-    const meta = (
-      payload as {
-        data?: { metadata?: Record<string, string>; payment_id?: string; total_amount?: unknown; currency?: unknown };
+    const type = (payload as { type?: string }).type ?? "";
+    const meta = (payload as { data?: DodoEventData }).data;
+    if (type === "payment.succeeded" && meta?.metadata?.kind === "stake_topup") {
+      const result = await creditStakeTopup(meta);
+      if (!result.credited) {
+        // 200 so Dodo stops retrying; the payment id and reason are in the log for reconciliation.
+        console.error("dodo webhook: stake top-up not credited", { paymentId: meta.payment_id, reason: result.reason });
       }
-    ).data;
+      return NextResponse.json({ received: true, credited: result.credited });
+    }
+    if (type.startsWith("dispute.") || type.startsWith("refund.")) {
+      if (meta) await recordPaymentIncident(type, meta, req.headers.get("webhook-id"));
+      return NextResponse.json({ received: true });
+    }
     if (type === "payment.succeeded" && meta?.metadata?.bid_id) {
       const bid = await prisma.bid.findUnique({
         where: { id: meta.metadata.bid_id },

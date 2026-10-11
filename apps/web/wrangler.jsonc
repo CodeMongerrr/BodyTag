@@ -37,4 +37,6 @@
     "SHORT_URL": "https://bodytag-web.saarvix786.workers.dev"
   }
   // Secrets (wrangler secret put): SESSION_SECRET, DODO_API_KEY, DODO_WEBHOOK_SECRET
+  // To take Dodo payments: also set PAYMENT_PROVIDER="dodo", DODO_ENVIRONMENT, DODO_BID_PRODUCT_ID and
+  // DODO_STAKE_PRODUCT_ID (plain vars above), then register <APP_URL>/api/payments/dodo/webhook in the Dodo dashboard.
 }

@@ -36,31 +36,41 @@ export async function depositStake(opts: {
   creatorId: string;
   creatorEmail: string;
   amountCents: number;
+  /** Processor payment id when the deposit was actually charged; makes the credit idempotent per payment. */
+  paymentId?: string;
 }) {
   if (!Number.isInteger(opts.amountCents) || opts.amountCents <= 0 || opts.amountCents > MAX_STAKE_CENTS) {
     throw new Error("Invalid Stake amount");
   }
   const stake = await ensureStake(opts.campaignId, opts.creatorId);
   // Balance and ledger move together or not at all.
-  const updated = await prisma.$transaction(async (tx) => {
-    const row = await tx.stake.update({
-      where: { id: stake.id },
-      data: {
-        amountCents: { increment: opts.amountCents },
-        depositedCents: { increment: opts.amountCents },
-        status: "held",
-      },
+  let updated;
+  try {
+    updated = await prisma.$transaction(async (tx) => {
+      // The unique paymentId on the ledger row is the idempotency guard: a duplicate delivery fails here and rolls
+      // the balance increment back with it.
+      await tx.stakeLedger.create({
+        data: {
+          stakeId: stake.id,
+          type: "deposit",
+          amountCents: opts.amountCents,
+          paymentId: opts.paymentId,
+          note: "Prepaid hosted-service margin — not escrow of brand funds",
+        },
+      });
+      return tx.stake.update({
+        where: { id: stake.id },
+        data: {
+          amountCents: { increment: opts.amountCents },
+          depositedCents: { increment: opts.amountCents },
+          status: "held",
+        },
+      });
     });
-    await tx.stakeLedger.create({
-      data: {
-        stakeId: stake.id,
-        type: "deposit",
-        amountCents: opts.amountCents,
-        note: "Prepaid hosted-service margin — not escrow of brand funds",
-      },
-    });
-    return row;
-  });
+  } catch (e) {
+    if (opts.paymentId && (e as { code?: string }).code === "P2002") return stake; // already credited
+    throw e;
+  }
   const campaign = await prisma.campaign.findUniqueOrThrow({ where: { id: opts.campaignId } });
   if (campaign.status === "paused" && campaign.pausedReason?.includes("Stake")) {
     const check = await enforceMargin(opts.campaignId);
