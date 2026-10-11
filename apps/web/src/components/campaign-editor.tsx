@@ -34,9 +34,13 @@ export function CampaignEditor({
   campaign,
   handle,
   minStake,
+  feeBps,
+  requireStake,
 }: {
   handle: string;
   minStake: number;
+  feeBps: number;
+  requireStake: boolean;
   campaign: {
     id: string;
     title: string;
@@ -55,6 +59,7 @@ export function CampaignEditor({
   };
 }) {
   const [pending, start] = useTransition();
+  const [vetoMsg, setVetoMsg] = useState<string | null>(null);
   const config = { ...defaultArenaConfig, ...(campaign.arenaConfig as Partial<ArenaConfig>) };
   const veto = Array.isArray(campaign.vetoList) ? (campaign.vetoList as string[]).join(", ") : "";
 
@@ -78,7 +83,12 @@ export function CampaignEditor({
           {campaign.status === "live" ? (
             <button
               className="border border-line px-3 py-2"
-              onClick={() => start(async () => { await pauseCampaignAction(campaign.id, "Paused by creator without unpublishing"); })}
+              onClick={() =>
+                start(async () => {
+                  const res = await pauseCampaignAction(campaign.id, "Paused by creator without unpublishing");
+                  if (res && "error" in res && res.error) alert(res.error);
+                })
+              }
             >
               Pause bidding
             </button>
@@ -95,7 +105,7 @@ export function CampaignEditor({
               Resume
             </button>
           ) : null}
-          {campaign.status === "draft" || campaign.status === "paused" ? (
+          {campaign.status === "draft" ? (
             <button
               disabled={pending}
               className="bg-accent px-4 py-2 font-medium text-ink"
@@ -119,6 +129,8 @@ export function CampaignEditor({
         gmv={campaign.gmvCents}
         fee={campaign.accruedFeeCents}
         status={campaign.status}
+        feeBps={feeBps}
+        requireStake={requireStake}
       />
 
       {campaign.theme === "photo" ? (
@@ -149,13 +161,15 @@ export function CampaignEditor({
       <form
         className="border border-line p-4"
         action={async (fd) => {
-          await saveVetoAction(campaign.id, String(fd.get("veto") ?? ""));
+          const res = await saveVetoAction(campaign.id, String(fd.get("veto") ?? ""));
+          setVetoMsg(res && "error" in res && res.error ? res.error : "Saved.");
         }}
       >
         <h2 className="text-xl">Brand veto list</h2>
         <p className="text-sm text-muted">Comma-separated names to auto-block (competitors, NSFW, politics).</p>
         <input name="veto" defaultValue={veto} className="mt-2 w-full bg-ink p-2" />
         <button className="mt-3 border border-line px-3 py-2">Save veto</button>
+        {vetoMsg && <span role="status" className="ml-3 text-sm text-muted">{vetoMsg}</span>}
       </form>
     </main>
   );
@@ -172,6 +186,7 @@ function ArenaKnobs({
   slots: Slot[];
   surfaces: Surface[];
 }) {
+  const [arenaMsg, setArenaMsg] = useState<string | null>(null);
   return (
     <div className="grid gap-8 lg:grid-cols-2">
       <form
@@ -192,7 +207,8 @@ function ArenaKnobs({
             soundtrackMutedMobile: true,
             showHdri: fd.get("showHdri") === "on",
           };
-          await saveArenaConfigAction(campaignId, JSON.stringify(next));
+          const res = await saveArenaConfigAction(campaignId, JSON.stringify(next));
+          setArenaMsg(res && "error" in res && res.error ? res.error : "Saved.");
         }}
       >
         <h2 className="text-xl">Arena knobs</h2>
@@ -228,7 +244,10 @@ function ArenaKnobs({
         </select>
         <label className="block text-xs text-muted">In-scene video URL</label>
         <input name="inSceneVideoUrl" defaultValue={config.inSceneVideoUrl} className="w-full bg-ink p-2" />
-        <button className="bg-accent px-4 py-2 text-ink">Save arena</button>
+        <div className="flex items-center gap-3">
+          <button className="bg-accent px-4 py-2 text-ink">Save arena</button>
+          {arenaMsg && <span role="status" className="text-sm text-muted">{arenaMsg}</span>}
+        </div>
       </form>
       <BodyPanel campaignId={campaignId} slots={slots} surfaces={surfaces} />
       <form
@@ -240,9 +259,14 @@ function ArenaKnobs({
           const fd = new FormData();
           fd.set("file", file);
           fd.set("kind", "audio");
-          const up = await fetch("/api/uploads", { method: "POST", body: fd }).then((r) => r.json());
-          await saveSoundtrackAction(campaignId, up.key);
-          window.location.reload();
+          try {
+            const up = (await fetch("/api/uploads", { method: "POST", body: fd }).then((r) => r.json())) as { key?: string; error?: string };
+            if (!up.key) throw new Error(up.error ?? "Upload failed");
+            await saveSoundtrackAction(campaignId, up.key);
+            window.location.reload();
+          } catch (err) {
+            alert(err instanceof Error ? err.message : "Upload failed");
+          }
         }}
       >
         <h2 className="text-xl">Soundtrack loop</h2>

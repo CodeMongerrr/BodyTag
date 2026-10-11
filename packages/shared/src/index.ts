@@ -186,9 +186,13 @@ export const NSFW_TERMS = [
   "terror",
 ];
 
+/**
+ * Match blocked terms at the start of a word so "Chateau" or "Photographer" are not flagged by "hate"/"porn"-style substrings,
+ * while "hateful" or "pornography" still are.
+ */
 export function moderateText(input: string) {
   const lower = input.toLowerCase();
-  return NSFW_TERMS.find((t) => lower.includes(t)) ?? null;
+  return NSFW_TERMS.find((t) => new RegExp(`(^|[^a-z0-9])${t}`).test(lower)) ?? null;
 }
 
 export function slugify(value: string) {

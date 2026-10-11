@@ -7,21 +7,14 @@ export default async function CreatorHandlePage({ params }: { params: Promise<{ 
   const creator = await prisma.user.findUnique({ where: { handle } });
   if (!creator) notFound();
 
-  // Find their most recent live or active campaign
-  const campaign = await prisma.campaign.findFirst({
-    where: { creatorId: creator.id, status: { in: ["live", "paused", "closed"] } },
+  // Prefer what is actually on sale: live first, then paused, then ended campaigns. Drafts are never public.
+  const campaigns = await prisma.campaign.findMany({
+    where: { creatorId: creator.id, status: { in: ["live", "paused", "closed", "fulfilled"] } },
     orderBy: { createdAt: "desc" },
   });
+  const rank = (status: string) => ["live", "paused"].indexOf(status) + 1 || 3;
+  const best = [...campaigns].sort((a, b) => rank(a.status) - rank(b.status))[0];
+  if (!best) notFound();
 
-  if (!campaign) {
-    // If no live campaign, check if any campaign exists
-    const anyCampaign = await prisma.campaign.findFirst({
-      where: { creatorId: creator.id },
-      orderBy: { createdAt: "desc" },
-    });
-    if (!anyCampaign) notFound();
-    redirect(livePath(handle, anyCampaign.slug));
-  }
-
-  redirect(livePath(handle, campaign.slug));
+  redirect(livePath(handle, best.slug));
 }

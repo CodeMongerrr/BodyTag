@@ -6,7 +6,7 @@ import { headers } from "next/headers";
 import bcrypt from "bcryptjs";
 import { nanoid } from "nanoid";
 import { CampaignTheme, type Prisma } from "@bodytag/db";
-import { DEFAULT_ARENA_SLOTS, defaultArenaConfig, slugify } from "@bodytag/shared";
+import { DEFAULT_ARENA_SLOTS, defaultArenaConfig, isSafeHttpUrl, slugify, type ArenaConfig } from "@bodytag/shared";
 import { prisma } from "@/lib/db";
 import { clearSession, createSession, requireUser } from "@/lib/auth";
 import { handleAllowed, assertCanPublish, submitKyc } from "@/lib/kyc";
@@ -14,19 +14,26 @@ import { MAX_STAKE_CENTS, canPublish, captureAndRefundStake, depositStake, enfor
 import { BidError, createBidIntent } from "@/lib/bids";
 import { PaymentUnavailableError } from "@/lib/circuit";
 import { allowByIp, clientIp } from "@/lib/http";
-import { isEmail, isPositiveInt32 } from "@/lib/validation";
 import { enqueueImageJobs } from "@/lib/queue";
 import { checkRateLimit } from "@/lib/redis";
 import { publishCampaign } from "@/lib/redis";
 
 export type AuthState = { error: string | null };
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MAX_PRICE_CENTS = 100_000_000; // $1M per slot; takeovers double, so stay far below int32.
+
+/** Statuses where a campaign can still be edited / published for the first time. */
+const EDITABLE = ["draft"] as const;
+const ACTIVE = ["live", "paused"] as const;
+const isIn = (list: readonly string[], status: string) => list.includes(status);
+
 export async function registerStateAction(_prev: AuthState, formData: FormData): Promise<AuthState> {
   const email = String(formData.get("email") ?? "").toLowerCase().trim();
   const password = String(formData.get("password") ?? "");
   const name = String(formData.get("name") ?? "").trim();
   const handle = String(formData.get("handle") ?? "").toLowerCase().trim();
-  if (!isEmail(email) || password.length < 8 || password.length > 128 || !name || name.length > 80 || !handleAllowed(handle)) {
+  if (!EMAIL_RE.test(email) || email.length > 254 || password.length < 8 || password.length > 128 || name.length > 80 || !name || !handleAllowed(handle)) {
     return { error: "Use a valid email, 8+ character password, and a free handle (letters/numbers)." };
   }
   if (!(await allowByIp(await headers(), "register", 10, 3600))) {
@@ -39,10 +46,9 @@ export async function registerStateAction(_prev: AuthState, formData: FormData):
     user = await prisma.user.create({
       data: { email, name, handle, passwordHash: await bcrypt.hash(password, 10) },
     });
-  } catch (e) {
-    // Lost a race on the unique email/handle index.
-    if ((e as { code?: string }).code === "P2002") return { error: "Email or handle already taken." };
-    throw e;
+  } catch {
+    // Unique-constraint race: someone claimed the email/handle between the check above and the insert.
+    return { error: "Email or handle already taken." };
   }
   await createSession({ userId: user.id, email: user.email, handle: user.handle });
   redirect("/dashboard");
@@ -88,16 +94,20 @@ export async function createCampaignAction(formData: FormData) {
   const eventCity = String(formData.get("eventCity") ?? "").trim();
   const eventDate = new Date(String(formData.get("eventDate") ?? ""));
   const closeAt = new Date(String(formData.get("closeAt") ?? ""));
-  const target = String(formData.get("targetTotal") ?? "").trim();
+  const target = String(formData.get("targetTotal") ?? "");
   if (!title || !eventName || Number.isNaN(eventDate.getTime()) || Number.isNaN(closeAt.getTime())) {
     return { error: "Title, event, dates are required." };
   }
-  if (title.length > 120 || eventName.length > 120 || eventCity.length > 80) {
-    return { error: "Title, event or city is too long." };
-  }
-  const targetCents = target ? Math.round(Number(target) * 100) : null;
-  if (targetCents !== null && !isPositiveInt32(targetCents)) {
-    return { error: "Target total must be a positive amount." };
+  if (title.length > 120 || eventName.length > 120) return { error: "Title and event name must be 120 characters or fewer." };
+  if (closeAt.getTime() <= Date.now()) return { error: "Auction close must be in the future." };
+  if (closeAt.getTime() > eventDate.getTime()) return { error: "Auction must close on or before the event date." };
+  let targetTotalCents: number | null = null;
+  if (target) {
+    const dollars = Number(target);
+    if (!Number.isFinite(dollars) || dollars < 0 || dollars * 100 > 2_000_000_000) {
+      return { error: "Target total must be a positive dollar amount." };
+    }
+    targetTotalCents = dollars > 0 ? Math.round(dollars * 100) : null;
   }
   const slug = slugify(title);
   const campaign = await prisma.campaign.create({
@@ -110,7 +120,7 @@ export async function createCampaignAction(formData: FormData) {
       eventCity,
       eventDate,
       closeAt,
-      targetTotalCents: targetCents,
+      targetTotalCents,
       shortCode: nanoid(6),
       previewSecret: nanoid(12),
       arenaConfig: defaultArenaConfig as unknown as Prisma.InputJsonValue,
@@ -139,22 +149,51 @@ export async function createCampaignAction(formData: FormData) {
   redirect(`/dashboard/campaigns/${campaign.id}`);
 }
 
+const ARENA_THEMES = ["grid", "ares", "studio", "neon", "none"] as const;
+const START_CAMERAS = ["front", "back", "threeQuarter"] as const;
+
+/** The editor posts a full config object; keep only known keys with valid values so a bad POST cannot break the arena. */
+function sanitizeArenaConfig(raw: unknown): { config: ArenaConfig } | { error: string } {
+  if (!raw || typeof raw !== "object") return { error: "Invalid arena settings." };
+  const r = raw as Record<string, unknown>;
+  const bool = (k: keyof ArenaConfig) => (typeof r[k] === "boolean" ? (r[k] as boolean) : (defaultArenaConfig[k] as boolean));
+  const pick = <T extends string>(v: unknown, allowed: readonly T[], fallback: T) => (allowed.includes(v as T) ? (v as T) : fallback);
+  const video = typeof r.inSceneVideoUrl === "string" ? r.inSceneVideoUrl.trim() : "";
+  if (video && !isSafeHttpUrl(video)) return { error: "In-scene video URL must start with http:// or https://" };
+  const decal = Number(r.maxDecalCm);
+  return {
+    config: {
+      theme: pick(r.theme, ARENA_THEMES, defaultArenaConfig.theme),
+      soundtrack: bool("soundtrack"),
+      soundtrackMutedMobile: bool("soundtrackMutedMobile"),
+      reducedMotion: bool("reducedMotion"),
+      showGrid: bool("showGrid"),
+      showHdri: bool("showHdri"),
+      showTicker: bool("showTicker"),
+      markerStyle: pick(r.markerStyle, ["outline", "filled"] as const, defaultArenaConfig.markerStyle),
+      maxDecalCm: Number.isFinite(decal) && decal > 0 && decal <= 100 ? decal : defaultArenaConfig.maxDecalCm,
+      startCamera: pick(r.startCamera, START_CAMERAS, defaultArenaConfig.startCamera),
+      rewindEnabled: bool("rewindEnabled"),
+      ...(video ? { inSceneVideoUrl: video } : {}),
+    },
+  };
+}
+
 export async function saveArenaConfigAction(campaignId: string, json: string) {
   const user = await requireUser();
   const campaign = await prisma.campaign.findUniqueOrThrow({ where: { id: campaignId } });
   if (campaign.creatorId !== user.id) return { error: "Forbidden" };
-  let config: unknown;
+  let raw: unknown;
   try {
-    config = JSON.parse(json);
+    raw = JSON.parse(json);
   } catch {
-    return { error: "Invalid arena config" };
+    return { error: "Invalid arena settings." };
   }
-  if (!config || typeof config !== "object" || Array.isArray(config) || json.length > 20_000) {
-    return { error: "Invalid arena config" };
-  }
+  const cleaned = sanitizeArenaConfig(raw);
+  if ("error" in cleaned) return { error: cleaned.error };
   await prisma.campaign.update({
     where: { id: campaignId },
-    data: { arenaConfig: config as Prisma.InputJsonValue },
+    data: { arenaConfig: cleaned.config as unknown as Prisma.InputJsonValue },
   });
   revalidatePath(`/dashboard/campaigns/${campaignId}`);
   return { ok: true };
@@ -187,17 +226,16 @@ export async function saveSlotsAction(campaignId: string, json: string) {
   try {
     slots = JSON.parse(json);
   } catch {
-    return { error: "Invalid slot data" };
+    return { error: "Invalid slot data." };
   }
-  if (!Array.isArray(slots) || slots.length > 64) return { error: "Invalid slot data" };
+  if (!Array.isArray(slots) || slots.length > 100) return { error: "Invalid slot data." };
   for (const slot of slots) {
-    if (!slot || typeof slot !== "object" || typeof slot.name !== "string" || !slot.name.trim() || slot.name.length > 80) {
-      return { error: "Every slot needs a name (80 characters max)" };
+    slot.name = String(slot.name ?? "").trim();
+    if (!slot.name) return { error: "Every slot needs a name." };
+    if (slot.name.length > 80) return { error: "Slot names must be 80 characters or fewer." };
+    if (!Number.isInteger(slot.startPriceCents) || slot.startPriceCents < 100 || slot.startPriceCents > MAX_PRICE_CENTS) {
+      return { error: `Price for "${slot.name}" must be between $1 and $${MAX_PRICE_CENTS / 100}.` };
     }
-    if (!isPositiveInt32(slot.startPriceCents) || slot.startPriceCents > 1_000_000_000) {
-      return { error: `Slot "${slot.name}" needs a positive whole-cent price` };
-    }
-    if (typeof slot.surfaceId !== "string" || !slot.surfaceId) return { error: "Every slot needs a surface" };
   }
 
   // Verify all updated slot IDs and surface IDs strictly belong to this campaign
@@ -314,8 +352,17 @@ export async function publishCampaignAction(campaignId: string) {
   const user = await requireUser();
   const campaign = await prisma.campaign.findUniqueOrThrow({ where: { id: campaignId } });
   if (campaign.creatorId !== user.id) return { error: "Forbidden" };
-  if (campaign.status !== "draft") return { error: "Only a draft campaign can be published." };
-  if ((await prisma.slot.count({ where: { campaignId } })) === 0) return { error: "Add at least one slot before going live." };
+  // Only a draft can be published. Paused campaigns must go through Resume (which re-checks the Stake margin);
+  // closed/fulfilled campaigns have already settled money and must never go live again.
+  if (!isIn(EDITABLE, campaign.status)) {
+    return { error: campaign.status === "paused" ? "This campaign is paused. Use Resume instead." : "This campaign is already published or finished." };
+  }
+  if (campaign.closeAt.getTime() <= Date.now()) return { error: "Auction close date has passed. Create a new campaign." };
+  const slotCount = await prisma.slot.count({ where: { campaignId } });
+  if (slotCount === 0) return { error: "Add at least one sellable slot before publishing." };
+  if (campaign.theme === "photo" && (await prisma.surface.count({ where: { campaignId } })) === 0) {
+    return { error: "Upload at least one photo to place your slots on before publishing." };
+  }
   const kyc = await assertCanPublish(user.id, campaign.eventDate);
   if (!kyc.ok) return { error: kyc.reason };
   const stake = await canPublish(campaignId, user.kycTier);
@@ -326,7 +373,7 @@ export async function publishCampaignAction(campaignId: string) {
     where: { id: campaignId, status: "draft" },
     data: { status: "live", pausedReason: null },
   });
-  if (published.count !== 1) return { error: "Only a draft campaign can be published." };
+  if (published.count !== 1) return { error: "This campaign is already published or finished." };
   await enqueueImageJobs(campaignId);
   revalidatePath(`/c/${user.handle}/${campaign.slug}`);
   redirect(`/@${user.handle}/${campaign.slug}`);
@@ -336,6 +383,7 @@ export async function pauseCampaignAction(campaignId: string, reason: string) {
   const user = await requireUser();
   const campaign = await prisma.campaign.findUniqueOrThrow({ where: { id: campaignId } });
   if (campaign.creatorId !== user.id) return { error: "Forbidden" };
+  if (campaign.status !== "live") return { error: "Only a live campaign can be paused." };
   const paused = await prisma.campaign.updateMany({
     where: { id: campaignId, status: "live" },
     data: { status: "paused", pausedReason: (reason || "Paused by creator").slice(0, 300) },
@@ -351,6 +399,7 @@ export async function resumeCampaignAction(campaignId: string) {
   const campaign = await prisma.campaign.findUniqueOrThrow({ where: { id: campaignId } });
   if (campaign.creatorId !== user.id) return { error: "Forbidden" };
   if (campaign.status !== "paused") return { error: "Only a paused campaign can be resumed." };
+  if (campaign.closeAt.getTime() <= Date.now()) return { error: "Auction close date has passed." };
   const marginCheck = await enforceMargin(campaignId);
   if (!marginCheck.ok) {
     return {
@@ -371,16 +420,15 @@ export async function depositStakeAction(formData: FormData) {
   const campaign = await prisma.campaign.findUniqueOrThrow({ where: { id: campaignId } });
   if (campaign.creatorId !== user.id) return { error: "Forbidden" };
   if (!Number.isFinite(dollars) || dollars <= 0) return { error: "Enter a Stake amount." };
-  const amountCents = Math.round(dollars * 100);
-  if (amountCents < 1 || amountCents > MAX_STAKE_CENTS) return { error: "Stake amount is out of range." };
-  if (campaign.status === "closed" || campaign.status === "fulfilled") {
-    return { error: "This campaign is already settled." };
+  if (dollars > 100_000 || Math.round(dollars * 100) > MAX_STAKE_CENTS || Math.round(dollars * 100) < 1) {
+    return { error: "Stake top-ups are limited to $100,000 at a time." };
   }
+  if (!isIn(["draft", "live", "paused"], campaign.status)) return { error: "This campaign is finished; Stake can no longer be topped up." };
   await depositStake({
     campaignId,
     creatorId: user.id,
     creatorEmail: user.email,
-    amountCents,
+    amountCents: Math.round(dollars * 100),
   });
   revalidatePath(`/dashboard/campaigns/${campaignId}`);
   return { ok: true };
@@ -390,12 +438,12 @@ export async function submitProofAction(campaignId: string, proofKey: string) {
   const user = await requireUser();
   const campaign = await prisma.campaign.findUniqueOrThrow({ where: { id: campaignId } });
   if (campaign.creatorId !== user.id) return { error: "Forbidden" };
+  // Capturing the fee twice would wipe the accrued fee/GMV snapshot, and a draft has nothing to prove.
+  if (!isIn(ACTIVE, campaign.status)) return { error: "Event proof can only be submitted for a live or paused campaign." };
   if (!/^proof\/[A-Za-z0-9_./-]{1,200}$/.test(proofKey) || proofKey.includes("..")) {
     return { error: "Upload the event proof first." };
   }
-  if (campaign.status !== "live" && campaign.status !== "paused") {
-    return { error: "Only a running campaign can be marked fulfilled." };
-  }
+  // captureAndRefundStake closes the campaign atomically with the Stake settlement, so do not pre-close it here.
   let result;
   try {
     result = await captureAndRefundStake(campaignId, "fulfilled");
@@ -411,6 +459,8 @@ export async function cancelCampaignAction(campaignId: string) {
   const user = await requireUser();
   const campaign = await prisma.campaign.findUniqueOrThrow({ where: { id: campaignId } });
   if (campaign.creatorId !== user.id) return { error: "Forbidden" };
+  // After fulfilment/cancellation the money has already moved; cancelling again would refund brands a second time.
+  if (!isIn(["draft", "live", "paused"], campaign.status)) return { error: "This campaign is already finished." };
   let result;
   try {
     result = await captureAndRefundStake(campaignId, "cancelled");
@@ -422,17 +472,17 @@ export async function cancelCampaignAction(campaignId: string) {
   return { ok: true, result };
 }
 
-export async function kycAction(formData: FormData) {
+export async function kycAction(formData: FormData): Promise<KycState> {
   const user = await requireUser();
-  const field = (name: string) => String(formData.get(name) ?? "").trim().slice(0, 64) || undefined;
-  const tier = await submitKyc(user.id, {
-    phone: field("phone"),
-    socialX: field("socialX"),
-    socialInstagram: field("socialInstagram"),
+  const result = await submitKyc(user.id, {
+    phone: String(formData.get("phone") ?? "") || undefined,
+    socialX: String(formData.get("socialX") ?? "") || undefined,
+    socialInstagram: String(formData.get("socialInstagram") ?? "") || undefined,
     idSelfie: formData.get("idSelfie") === "on",
   });
+  if ("error" in result) return { ok: false, error: result.error };
   revalidatePath("/dashboard/kyc");
-  return { ok: true, tier };
+  return { ok: true, tier: result.tier };
 }
 
 export async function bidAction(input: {
@@ -541,47 +591,49 @@ export async function reportCampaignAction(campaignId: string, reason: string, e
   return { ok: true };
 }
 
-export async function createTicketFormAction(formData: FormData) {
-  await createTicketAction(formData);
+export type TicketState = { ok: boolean; error?: string };
+export async function createTicketFormAction(_prev: TicketState, formData: FormData): Promise<TicketState> {
+  return createTicketAction(formData);
 }
 
-export async function depositStakeFormAction(formData: FormData) {
-  await depositStakeAction(formData);
+export async function depositStakeFormAction(_prev: { ok?: boolean; error?: string }, formData: FormData) {
+  const res = await depositStakeAction(formData);
+  return res ?? {};
 }
 
-export async function kycFormAction(formData: FormData) {
-  await kycAction(formData);
+export type KycState = { ok: boolean; error?: string; tier?: number };
+export async function kycFormAction(_prev: KycState, formData: FormData): Promise<KycState> {
+  return kycAction(formData);
 }
 
-export async function createTicketAction(formData: FormData) {
+export async function createTicketAction(formData: FormData): Promise<{ ok: boolean; error?: string }> {
   const email = String(formData.get("email") ?? "").trim().toLowerCase();
   const body = String(formData.get("body") ?? "").trim();
-  if (!isEmail(email) || !body || body.length > 4000) {
-    return { ok: false as const, error: "Enter a valid email and a message under 4000 characters." };
-  }
+  if (!EMAIL_RE.test(email)) return { ok: false, error: "Enter a valid email so we can reply." };
+  if (body.length < 5 || body.length > 4000) return { ok: false, error: "Describe the problem in 5–4000 characters." };
   let allowed = true;
   try {
     allowed = await allowByIp(await headers(), "ticket", 5, 600);
   } catch {
-    // outside a request context
+    /* outside a request context */
   }
   if (!allowed) {
-    return { ok: false as const, error: "Too many tickets. Try again later." };
+    return { ok: false, error: "Too many tickets from this connection. Try again in a few minutes." };
   }
-  const optional = (name: string) => String(formData.get(name) ?? "").trim().slice(0, 128) || null;
-  const campaignId = optional("campaignId");
-  const knownCampaign = campaignId
-    ? await prisma.campaign.findUnique({ where: { id: campaignId }, select: { id: true } })
+  // An unknown campaign id would violate the foreign key and 500 the form.
+  const rawCampaignId = String(formData.get("campaignId") ?? "").slice(0, 64);
+  const knownCampaign = rawCampaignId
+    ? await prisma.campaign.findUnique({ where: { id: rawCampaignId }, select: { id: true } })
     : null;
   await prisma.supportTicket.create({
     data: {
-      kind: String(formData.get("kind") ?? "general").trim().slice(0, 40) || "general",
+      kind: String(formData.get("kind") ?? "general").slice(0, 40),
       email,
       body,
       campaignId: knownCampaign?.id ?? null,
-      slotId: optional("slotId"),
-      paymentId: optional("paymentId"),
+      slotId: String(formData.get("slotId") ?? "") || null,
+      paymentId: String(formData.get("paymentId") ?? "") || null,
     },
   });
-  return { ok: true as const };
+  return { ok: true };
 }

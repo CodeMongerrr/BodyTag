@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { PublicCampaign } from "@/lib/campaigns";
 import { formatMoney } from "@bodytag/shared";
 import { publicFileUrl } from "@/lib/public-url";
@@ -27,6 +27,7 @@ export function CampaignStorefront({ campaign, preview }: { campaign: PublicCamp
   const [viewers, setViewers] = useState(1);
   const [openBid, setOpenBid] = useState(false);
   const [rewind, setRewind] = useState(false);
+  const detailRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setLocal(campaign);
@@ -50,7 +51,8 @@ export function CampaignStorefront({ campaign, preview }: { campaign: PublicCamp
   );
   const surface = local.surfaces.find((s) => s.id === surfaceId) ?? local.surfaces[0];
   const slot = local.slots.find((s) => s.id === selected);
-  const raised = local.slots.reduce((s, sl) => s + (sl.owner ? sl.currentPriceCents / 2 : 0), 0);
+  const raised = local.slots.reduce((s, sl) => s + (sl.owner ? sl.owner.amountCents : 0), 0);
+  const raisedCents = local.gmvCents || raised;
   const sold = local.slots.filter((s) => s.owner).length;
 
   useEffect(() => {
@@ -65,15 +67,15 @@ export function CampaignStorefront({ campaign, preview }: { campaign: PublicCamp
           refreshCampaign();
         }
         if (data.type === "paused") {
-          setLocal((prev) => ({
-            ...prev,
-            status: "paused",
-            pausedReason: typeof data.reason === "string" ? data.reason : prev.pausedReason,
-          }));
+          // The reason on the event is a machine code; the human-readable text comes with the refreshed campaign.
+          setLocal((prev) => ({ ...prev, status: "paused" }));
           refreshCampaign();
         }
         if (data.type === "live") {
           setLocal((prev) => ({ ...prev, status: "live", pausedReason: null }));
+          refreshCampaign();
+        }
+        if (data.type === "cancelled") {
           refreshCampaign();
         }
         if (data.type === "creative" || data.type === "update") {
@@ -86,18 +88,38 @@ export function CampaignStorefront({ campaign, preview }: { campaign: PublicCamp
     return () => es.close();
   }, [campaign.id]);
 
+  // The slot card sits below the sponsor list; bring it into view when a slot is picked from the 3D scene or the photo.
   useEffect(() => {
-    if (!selected) return;
-    fetch("/api/views", { method: "POST", body: JSON.stringify({ slotId: selected }), headers: { "content-type": "application/json" } });
+    if (selected) detailRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [selected]);
 
-  const live = local.status === "live" && !preview;
+  useEffect(() => {
+    if (!selected || preview) return;
+    fetch("/api/views", { method: "POST", body: JSON.stringify({ slotId: selected }), headers: { "content-type": "application/json" } }).catch(() => {});
+  }, [selected, preview]);
+
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(id);
+  }, []);
+  const auctionClosed = new Date(local.closeAt).getTime() <= now;
+  const ended = local.status === "closed" || local.status === "fulfilled";
+  const live = local.status === "live" && !preview && !auctionClosed;
 
   return (
     <main>
       {(local.status === "paused" || preview) && (
         <div className="bg-signal px-4 py-2 text-center text-sm text-paper">
           {preview ? "Preview — noindex, not live." : local.pausedReason ?? "Bidding paused. The page stays up as evidence."}
+        </div>
+      )}
+      {!preview && local.status === "live" && auctionClosed && (
+        <div className="bg-panel px-4 py-2 text-center text-sm text-muted">Bidding has closed for this campaign.</div>
+      )}
+      {ended && !preview && (
+        <div className="bg-panel px-4 py-2 text-center text-sm text-muted">
+          {local.status === "fulfilled" ? "This event has taken place and the campaign is complete." : "This campaign has ended and is no longer taking bids."}
         </div>
       )}
       {!local.creator.verified && (
@@ -109,7 +131,7 @@ export function CampaignStorefront({ campaign, preview }: { campaign: PublicCamp
       <div className="mx-auto grid max-w-6xl gap-8 px-4 py-8 lg:grid-cols-[1.3fr_0.7fr]">
         <div>
           <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-accent">
-            @{local.creator.handle} · {local.eventCity} · {viewers} watching
+            @{local.creator.handle} · {local.eventCity ? `${local.eventCity} · ` : ""}{viewers} watching
           </p>
           <h1 className="mt-2 text-4xl md:text-5xl">{local.title}</h1>
           <p className="mt-2 text-sm text-muted">{local.affiliationNote}</p>
@@ -168,12 +190,12 @@ export function CampaignStorefront({ campaign, preview }: { campaign: PublicCamp
         <aside className="space-y-6">
           <div className="border border-line p-4">
             <p className="font-mono text-xs uppercase tracking-widest text-muted">Raised (winning slots)</p>
-            <p className="display text-4xl">{formatMoney(local.gmvCents || raised)}</p>
-            {local.targetTotalCents && (
+            <p className="display text-4xl">{formatMoney(raisedCents, local.currency)}</p>
+            {!!local.targetTotalCents && local.targetTotalCents > 0 && (
               <div className="mt-2 h-2 bg-ink">
                 <div
                   className="h-2 bg-accent"
-                  style={{ width: `${Math.min(100, ((local.gmvCents || raised) / local.targetTotalCents) * 100)}%` }}
+                  style={{ width: `${Math.min(100, (raisedCents / local.targetTotalCents) * 100)}%` }}
                 />
               </div>
             )}
@@ -200,17 +222,17 @@ export function CampaignStorefront({ campaign, preview }: { campaign: PublicCamp
                         {s.owner ? s.owner.brandName : "Available"} · {s.viewCount} views
                       </span>
                     </span>
-                    <span className="font-mono text-sm">{formatMoney(s.takeoverCents)}</span>
+                    <span className="font-mono text-sm">{formatMoney(s.takeoverCents, local.currency)}</span>
                   </button>
                 </li>
               ))}
             </ul>
           </div>
           {slot && (
-            <div className="border border-accent p-4">
+            <div ref={detailRef} className="border border-accent p-4">
               <h3 className="text-2xl">{slot.name}</h3>
               <p className="text-sm text-muted">
-                {slot.sizeNote} {slot.hyroxCm ? `· HYROX ${slot.hyroxCm} cm²` : ""}
+                {[slot.sizeNote, slot.hyroxCm ? `HYROX ${slot.hyroxCm} cm²` : null].filter(Boolean).join(" · ")}
               </p>
               {slot.owner ? (
                 <p className="mt-2">
@@ -230,10 +252,12 @@ export function CampaignStorefront({ campaign, preview }: { campaign: PublicCamp
               ) : (
                 <p className="mt-2 text-muted">No owner yet. First purchase owns until a 2× takeover.</p>
               )}
-              <p className="mt-2 font-mono">{formatMoney(slot.currentPriceCents)} to own</p>
+              <p className="mt-2 font-mono">
+                {formatMoney(slot.currentPriceCents, local.currency)} {slot.owner ? "to take over" : "to own"}
+              </p>
               {live && (
                 <button type="button" className="mt-3 w-full bg-accent py-3 font-medium text-ink" onClick={() => setOpenBid(true)}>
-                  Purchase this slot
+                  {slot.owner ? "Take over this slot" : "Purchase this slot"}
                 </button>
               )}
             </div>
@@ -262,7 +286,10 @@ export function CampaignStorefront({ campaign, preview }: { campaign: PublicCamp
               type="button"
               onClick={() => {
                 const reason = prompt("Why are you reporting this campaign?");
-                if (reason) reportCampaignAction(local.id, reason);
+                if (!reason) return;
+                reportCampaignAction(local.id, reason)
+                  .then((res) => alert(res.ok ? "Thanks. Your report was sent to our moderators." : res.error ?? "Could not send report."))
+                  .catch(() => alert("Could not send report. Try again."));
               }}
             >
               Report
@@ -295,7 +322,7 @@ function Countdown({ to }: { to: string }) {
   useEffect(() => {
     const tick = () => {
       const ms = new Date(to).getTime() - Date.now();
-      if (ms <= 0) setLabel("Closed");
+      if (ms <= 0) setLabel("Bidding closed");
       else {
         const h = Math.floor(ms / 3600000);
         const m = Math.floor((ms % 3600000) / 60000);
@@ -310,15 +337,10 @@ function Countdown({ to }: { to: string }) {
 }
 
 function Ticker({ viewers }: { viewers: number }) {
-  const countries = useMemo(() => ["IN", "US", "SG", "DE", "BR"], []);
-  const [i, setI] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => setI((x) => x + 1), 2800);
-    return () => clearInterval(id);
-  }, []);
+  // Only show what we actually know. (This used to cycle through made-up countries, which implied visitors that never existed.)
   return (
-    <p className="font-mono text-xs uppercase tracking-widest text-muted">
-      Visitor from {countries[i % countries.length]} · {viewers} on the floor
+    <p className="font-mono text-xs uppercase tracking-widest text-muted" aria-live="polite">
+      {viewers} on the floor right now
     </p>
   );
 }

@@ -19,7 +19,7 @@ export function BidOverlay({
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-ink/80 p-4" role="dialog" aria-modal>
+    <div className="fixed inset-0 z-50 grid place-items-center bg-ink/80 p-4" role="dialog" aria-modal="true" aria-label={`Purchase ${slot.name}`}>
       <form
         className="w-full max-w-md border border-line bg-panel p-6"
         onSubmit={async (e) => {
@@ -33,12 +33,13 @@ export function BidOverlay({
             setPending(false);
             return;
           }
+          try {
           const fd = new FormData();
           fd.set("file", file);
           fd.set("kind", "logo");
-          const up = await fetch("/api/uploads", { method: "POST", body: fd }).then((r) => r.json());
-          if (up.error) {
-            setError(up.error);
+          const up = (await fetch("/api/uploads", { method: "POST", body: fd }).then((r) => r.json())) as { key?: string; error?: string };
+          if (!up.key) {
+            setError(up.error ?? "Logo upload failed. Try again.");
             setPending(false);
             return;
           }
@@ -64,12 +65,18 @@ export function BidOverlay({
           }
           if (result.checkoutUrl) {
             window.location.href = result.checkoutUrl;
+            return;
+          }
+          setError("Checkout could not be started. You have not been charged; please try again.");
+          } catch {
+            setPending(false);
+            setError("Something went wrong. You have not been charged; please try again.");
           }
         }}
       >
         <div className="flex items-start justify-between">
           <h2 className="text-2xl">Purchase {slot.name}</h2>
-          <button type="button" onClick={onClose} className="text-muted">
+          <button type="button" onClick={onClose} className="text-muted" disabled={pending}>
             Close
           </button>
         </div>
@@ -88,7 +95,7 @@ export function BidOverlay({
         <label className="mt-3 block text-xs uppercase tracking-widest text-muted">Website</label>
         <input name="url" type="url" className="w-full bg-ink p-2" />
         <label className="mt-3 block text-xs uppercase tracking-widest text-muted">X handle</label>
-        <input name="x" className="w-full bg-ink p-2" />
+        <input name="x" placeholder="@handle" className="w-full bg-ink p-2" />
         {error && <p className="mt-3 text-signal">{error}</p>}
         <button disabled={pending} className="mt-5 w-full bg-accent py-3 font-medium text-ink">
           {pending ? "Working…" : `Pay ${formatMoney(slot.currentPriceCents)}`}

@@ -28,6 +28,7 @@ export function PhotoEditor({
   const [active, setActive] = useState(surfaces[0]?.id ?? "");
   const [drafts, setDrafts] = useState<DraftSlot[]>(slots);
   const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const [drawing, setDrawing] = useState<Rect | null>(null);
   const origin = useRef<{ x: number; y: number } | null>(null);
   const box = useRef<HTMLDivElement>(null);
@@ -35,7 +36,8 @@ export function PhotoEditor({
 
   function pos(e: React.PointerEvent) {
     const r = box.current!.getBoundingClientRect();
-    return { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
+    const clamp = (n: number) => Math.min(1, Math.max(0, n));
+    return { x: clamp((e.clientX - r.left) / r.width), y: clamp((e.clientY - r.top) / r.height) };
   }
 
   const handleDeleteSlot = (index: number) => {
@@ -60,10 +62,18 @@ export function PhotoEditor({
       }
 
       setDrafts(deduplicated);
+      setMessage(null);
       const res = await onSave(deduplicated);
-      if (res && "slots" in res && Array.isArray(res.slots)) {
-        setDrafts(res.slots as DraftSlot[]);
+      if (res && "error" in res && res.error) {
+        setMessage({ kind: "error", text: res.error });
+      } else {
+        if (res && "slots" in res && Array.isArray(res.slots)) {
+          setDrafts(res.slots as DraftSlot[]);
+        }
+        setMessage({ kind: "ok", text: "Slots saved." });
       }
+    } catch {
+      setMessage({ kind: "error", text: "Could not save slots. Check your connection and try again." });
     } finally {
       setSaving(false);
     }
@@ -87,8 +97,10 @@ export function PhotoEditor({
         {surface && (
           <div
             ref={box}
-            className="relative cursor-crosshair border border-line bg-panel"
+            className="relative cursor-crosshair touch-none border border-line bg-panel"
             onPointerDown={(e) => {
+              if ((e.target as HTMLElement).closest("button")) return; // clicking × must not start a new slot
+              e.currentTarget.setPointerCapture(e.pointerId);
               origin.current = pos(e);
               setDrawing({ x: origin.current.x, y: origin.current.y, w: 0, h: 0 });
             }}
@@ -102,13 +114,17 @@ export function PhotoEditor({
                 h: Math.abs(p.y - origin.current.y),
               });
             }}
+            onPointerCancel={() => {
+              origin.current = null;
+              setDrawing(null);
+            }}
             onPointerUp={() => {
               if (drawing && drawing.w > 0.02 && drawing.h > 0.02) {
                 setDrafts((d) => [
                   ...d,
                   {
                     surfaceId: active,
-                    name: `Spot ${d.length + 1}`,
+                    name: nextSpotName(d),
                     startPriceCents: 35000,
                     rect: drawing,
                     hyroxCm: 20,
@@ -120,7 +136,7 @@ export function PhotoEditor({
             }}
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={publicFileUrl(surface.objectKey)} alt={surface.label} className="block w-full select-none" />
+            <img src={publicFileUrl(surface.objectKey)} alt={surface.label} draggable={false} className="block w-full select-none" />
             {drafts
               .filter((s) => s.surfaceId === active && s.rect)
               .map((s) => {
@@ -192,9 +208,14 @@ export function PhotoEditor({
               <div className="mt-2 flex gap-2">
                 <input
                   type="number"
-                  value={s.startPriceCents / 100}
+                  min={1}
+                  step={1}
+                  aria-label={`Start price in USD for ${s.name}`}
+                  value={Number.isFinite(s.startPriceCents) ? s.startPriceCents / 100 : ""}
                   onChange={(e) =>
-                    setDrafts((d) => d.map((x, j) => (j === i ? { ...x, startPriceCents: Math.round(Number(e.target.value) * 100) } : x)))
+                    setDrafts((d) =>
+                      d.map((x, j) => (j === i ? { ...x, startPriceCents: e.target.value === "" ? NaN : Math.round(Number(e.target.value) * 100) } : x)),
+                    )
                   }
                   className="w-24 bg-ink p-2 text-sm"
                 />
@@ -218,12 +239,26 @@ export function PhotoEditor({
         >
           {saving ? "Saving slots..." : "Save slots"}
         </button>
+        {message && (
+          <p role="status" className={`mt-2 text-sm ${message.kind === "error" ? "text-signal" : "text-accent"}`}>
+            {message.text}
+          </p>
+        )}
       </div>
     </div>
   );
 }
 
+/** "Spot N" with the lowest N not already in use, so deleting a slot and drawing another never duplicates a name. */
+function nextSpotName(existing: DraftSlot[]) {
+  const used = new Set(existing.map((s) => s.name));
+  let n = existing.length + 1;
+  while (used.has(`Spot ${n}`)) n++;
+  return `Spot ${n}`;
+}
+
 function SurfaceUpload({ campaignId }: { campaignId: string }) {
+  const [error, setError] = useState<string | null>(null);
   return (
     <form
       className="mt-4 flex flex-wrap items-end gap-3 text-sm"
@@ -233,16 +268,23 @@ function SurfaceUpload({ campaignId }: { campaignId: string }) {
         const file = (form.elements.namedItem("file") as HTMLInputElement).files?.[0];
         const label = (form.elements.namedItem("label") as HTMLInputElement).value || "photo";
         if (!file) return;
-        const fd = new FormData();
-        fd.set("file", file);
-        fd.set("kind", "photo");
-        const up = await fetch("/api/uploads", { method: "POST", body: fd }).then((r) => r.json());
-        await fetch(`/api/campaigns/${campaignId}/surfaces`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ objectKey: up.key, label, kind: "photo" }),
-        });
-        window.location.reload();
+        setError(null);
+        try {
+          const fd = new FormData();
+          fd.set("file", file);
+          fd.set("kind", "photo");
+          const up = (await fetch("/api/uploads", { method: "POST", body: fd }).then((r) => r.json())) as { key?: string; error?: string };
+          if (!up.key) throw new Error(up.error ?? "Upload failed");
+          const res = await fetch(`/api/campaigns/${campaignId}/surfaces`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ objectKey: up.key, label, kind: "photo" }),
+          });
+          if (!res.ok) throw new Error("Could not attach the photo to this campaign.");
+          window.location.reload();
+        } catch (err) {
+          setError(err instanceof Error ? err.message : "Upload failed");
+        }
       }}
     >
       <div>
@@ -251,6 +293,7 @@ function SurfaceUpload({ campaignId }: { campaignId: string }) {
       </div>
       <input name="label" placeholder="front" className="border border-line bg-ink p-2" />
       <button className="border border-line px-3 py-2">Upload surface</button>
+      {error && <p role="alert" className="w-full text-signal">{error}</p>}
     </form>
   );
 }

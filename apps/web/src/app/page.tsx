@@ -38,7 +38,7 @@ const SLAS = [
 export default async function HomePage() {
   const live = appConfig.marketplaceGrid
     ? await prisma.campaign.findMany({
-        where: { status: { in: ["live", "paused"] } },
+        where: { status: { in: ["live", "paused"] }, closeAt: { gt: new Date() } },
         include: { creator: true, slots: true },
         orderBy: { closeAt: "asc" },
         take: 12,
@@ -187,8 +187,7 @@ export default async function HomePage() {
           />
           {live.length === 0 && (
             <p className="border border-dashed border-line p-10 text-muted">
-              Nothing live yet. Seed with <code className="figures">pnpm db:seed</code>, then publish from the
-              dashboard.
+              No auctions are open right now. Check back soon, or start your own campaign.
             </p>
           )}
         </section>
