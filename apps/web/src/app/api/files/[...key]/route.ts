@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getObjectStream, resolveSafeFsPath } from "@/lib/storage";
+import { getObjectStream, resolveSafeFsPath, type ByteRange } from "@/lib/storage";
 
 const CONTENT_TYPES: Record<string, string> = {
   png: "image/png",
@@ -29,7 +29,18 @@ function contentTypeFor(objectKey: string) {
   return CONTENT_TYPES[ext] ?? "application/octet-stream";
 }
 
-export async function GET(_req: Request, { params }: { params: Promise<{ key: string[] }> }) {
+/** Single-range `Range: bytes=…` parser. Returns null for absent/unsupported headers (serve the whole object). */
+function parseRange(header: string | null): ByteRange | null {
+  const m = header?.match(/^bytes=(\d*)-(\d*)$/);
+  if (!m || (m[1] === "" && m[2] === "")) return null;
+  if (m[1] === "") return { suffix: Number(m[2]) };
+  const start = Number(m[1]);
+  const end = m[2] === "" ? undefined : Number(m[2]);
+  if (end !== undefined && end < start) return null;
+  return { start, end };
+}
+
+export async function GET(req: Request, { params }: { params: Promise<{ key: string[] }> }) {
   const { key } = await params;
   if (!key || !Array.isArray(key) || key.length === 0) {
     return NextResponse.json({ error: "not found" }, { status: 404 });
@@ -62,9 +73,10 @@ export async function GET(_req: Request, { params }: { params: Promise<{ key: st
     return NextResponse.json({ error: "invalid key" }, { status: 400 });
   }
 
+  const range = parseRange(req.headers.get("range"));
   let obj: Awaited<ReturnType<typeof getObjectStream>>;
   try {
-    obj = await getObjectStream(objectKey);
+    obj = await getObjectStream(objectKey, range ?? undefined);
   } catch {
     obj = null;
   }
@@ -78,8 +90,23 @@ export async function GET(_req: Request, { params }: { params: Promise<{ key: st
     // metadata may be missing (fs/s3) or a generic octet-stream.
     "content-type": contentTypeFor(objectKey),
     "x-content-type-options": "nosniff",
+    "accept-ranges": "bytes",
+    // Uploaded files are never documents: lock them down in case one is opened directly.
+    "content-security-policy": "default-src 'none'; sandbox",
     "cache-control": immutable ? "public, max-age=31536000, immutable" : "public, max-age=60, s-maxage=86400",
   });
-  if (typeof obj.size === "number") headers.set("content-length", String(obj.size));
+  const total = obj.size;
+  if (range && typeof total === "number") {
+    if (obj.range && obj.range.start >= total) {
+      headers.set("content-range", `bytes */${total}`);
+      return new Response(null, { status: 416, headers });
+    }
+    if (obj.range) {
+      headers.set("content-range", `bytes ${obj.range.start}-${obj.range.end}/${total}`);
+      headers.set("content-length", String(obj.range.end - obj.range.start + 1));
+      return new Response(obj.body, { status: 206, headers });
+    }
+  }
+  if (typeof total === "number") headers.set("content-length", String(total));
   return new Response(obj.body, { headers });
 }

@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { NextResponse } from "next/server";
-import { settleBid } from "@/lib/bids";
+import { BidError, settleBid } from "@/lib/bids";
 import { appConfig } from "@/lib/config";
 
 function timingSafeEqualStr(a: string, b: string): boolean {
@@ -91,6 +91,16 @@ function verifyStripeSignature(rawBody: string, headers: Headers, secret: string
   return false;
 }
 
+/** Settle, but answer 200 for a bid we have never heard of so the processor stops retrying a hopeless event. */
+async function settleFromWebhook(bidId: string, paymentId: string) {
+  try {
+    await settleBid({ bidId, paymentId });
+  } catch (e) {
+    if (e instanceof BidError && e.code === "not_found") return;
+    throw e;
+  }
+}
+
 export async function POST(req: Request, { params }: { params: Promise<{ provider: string }> }) {
   const { provider } = await params;
   const rawBody = await req.text();
@@ -112,7 +122,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ provide
     const type = (payload as { type?: string }).type;
     const meta = (payload as { data?: { metadata?: Record<string, string>; payment_id?: string } }).data;
     if (type === "payment.succeeded" && meta?.metadata?.bid_id) {
-      await settleBid({ bidId: meta.metadata.bid_id, paymentId: meta.payment_id ?? "dodo" });
+      await settleFromWebhook(meta.metadata.bid_id, meta.payment_id ?? "dodo");
     }
     return NextResponse.json({ received: true });
   }
@@ -141,7 +151,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ provide
     if (type === "checkout.session.completed" || type === "payment_intent.succeeded") {
       const bidId = dataObj?.metadata?.bid_id ?? dataObj?.metadata?.bidId ?? dataObj?.client_reference_id;
       if (bidId) {
-        await settleBid({ bidId, paymentId: dataObj?.id ?? "stripe" });
+        await settleFromWebhook(bidId, dataObj?.id ?? "stripe");
       }
     }
     return NextResponse.json({ received: true });

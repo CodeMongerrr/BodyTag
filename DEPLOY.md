@@ -78,6 +78,10 @@ Arena + image generation are **$0 to creators**. Your bill is:
 
 A 60k-visitor / 48h campaign is mostly CDN if thumbs are cached. Always Draco-compress GLBs and serve a screenshot on mobile.
 
+## Required secrets
+
+`SESSION_SECRET` must be a random string of 16+ characters in production. The app refuses to sign or verify session cookies with the built-in development default, because anyone could forge a login with it. On Cloudflare: `wrangler secret put SESSION_SECRET`. Also set `DODO_API_KEY` / `DODO_WEBHOOK_SECRET` (or `STRIPE_WEBHOOK_SECRET`) before taking real payments.
+
 ## Feature flags
 
 | Variable | Self-host default | Hosted |

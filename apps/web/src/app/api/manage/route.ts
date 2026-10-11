@@ -5,6 +5,8 @@ import { putObject, resolveSafeFsPath } from "@/lib/storage";
 import { isSafeHttpUrl, moderateText } from "@bodytag/shared";
 import { enqueueImageJobs } from "@/lib/queue";
 import { publishCampaign } from "@/lib/redis";
+import { allowByIp } from "@/lib/http";
+import { sniffImage } from "@/lib/validation";
 
 const ALLOWED_LOGO_MIME_TYPES: Record<string, string[]> = {
   "image/png": ["png"],
@@ -32,7 +34,15 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
-  const form = await req.formData();
+  if (!(await allowByIp(req.headers, "manage", 30, 60))) {
+    return NextResponse.json({ error: "Too many requests" }, { status: 429 });
+  }
+  let form: FormData;
+  try {
+    form = await req.formData();
+  } catch {
+    return NextResponse.json({ error: "Invalid form" }, { status: 400 });
+  }
   const token = String(form.get("token") ?? "").trim();
   if (!token) return NextResponse.json({ error: "token required" }, { status: 400 });
 
@@ -68,7 +78,11 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Invalid file path generated" }, { status: 400 });
     }
 
-    await putObject(key, Buffer.from(await file.arrayBuffer()), mimeType);
+    const bytes = Buffer.from(await file.arrayBuffer());
+    if (sniffImage(bytes) === null) {
+      return NextResponse.json({ error: "File is not a valid PNG, JPEG or WebP image" }, { status: 400 });
+    }
+    await putObject(key, bytes, mimeType);
     logoKey = key;
   }
 
@@ -84,9 +98,20 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Content failed moderation policy" }, { status: 400 });
   }
 
-  await prisma.creative.update({
+  if (rawTagline.length > 140 || rawXHandle.length > 50) {
+    return NextResponse.json({ error: "Tagline or handle is too long" }, { status: 400 });
+  }
+
+  await prisma.creative.upsert({
     where: { bidId: bid.id },
-    data: {
+    create: {
+      bidId: bid.id,
+      logoKey: logoKey ?? "",
+      tagline: rawTagline || null,
+      url: rawUrl || null,
+      xHandle: rawXHandle || null,
+    },
+    update: {
       logoKey: logoKey ?? "",
       tagline: rawTagline || null,
       url: rawUrl || null,

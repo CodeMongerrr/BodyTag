@@ -70,7 +70,8 @@ export async function ensureVariant(campaignId: string, variant: string) {
       where: {
         campaignId,
         variant,
-        status: { in: ["queued", "running"] },
+        // A recently failed render counts too: do not re-queue a broken render on every request.
+        status: { in: ["queued", "running", "failed"] },
         updatedAt: { gte: new Date(Date.now() - LAZY_JOB_FRESH_MS) },
       },
       orderBy: { updatedAt: "desc" },
@@ -82,6 +83,10 @@ export async function ensureVariant(campaignId: string, variant: string) {
     await sendToCfQueue(job.id);
     return job;
   }
+  const recentlyFailed = await prisma.imageJob.findFirst({
+    where: { campaignId, variant, status: "failed", updatedAt: { gte: new Date(Date.now() - LAZY_JOB_FRESH_MS) } },
+  });
+  if (recentlyFailed) throw new Error(`render recently failed: ${recentlyFailed.error ?? "unknown error"}`);
   const idempotencyKey = `${campaignId}:lazy:${variant}:${Date.now()}`;
   const job = await prisma.imageJob.create({
     data: { campaignId, variant, idempotencyKey, status: "queued" },

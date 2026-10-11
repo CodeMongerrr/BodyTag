@@ -7,6 +7,8 @@ import { r2Storage } from "./storage";
 
 type ImageMessage = { imageJobId: string };
 
+const MAX_ATTEMPTS = 5;
+
 export default {
   async queue(batch: MessageBatch<ImageMessage>, env: Env): Promise<void> {
     const prisma = createDb(env);
@@ -23,7 +25,11 @@ export default {
           message.ack();
         } catch (e) {
           console.error("image job failed", imageJobId, e);
-          message.retry({ delaySeconds: Math.min(300, 2 ** message.attempts * 2) });
+          if (message.attempts >= MAX_ATTEMPTS) {
+            message.ack(); // the ImageJob row is already marked failed; the images route re-queues a fresh one on demand
+          } else {
+            message.retry({ delaySeconds: Math.min(300, 2 ** message.attempts * 2) });
+          }
         }
       }
     } finally {

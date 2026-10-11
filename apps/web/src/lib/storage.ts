@@ -2,10 +2,15 @@ import path from "node:path";
 import { appConfig } from "./config";
 import { cfEnv } from "./runtime";
 
+export type ByteRange = { start: number; end?: number } | { suffix: number };
+
 export type StoredObjectStream = {
   body: ReadableStream<Uint8Array>;
   contentType?: string;
+  /** Total object size in bytes. */
   size?: number;
+  /** Present when only a slice was returned (inclusive byte offsets). */
+  range?: { start: number; end: number };
 };
 
 export function localRoot() {
@@ -97,17 +102,36 @@ export async function getObject(key: string) {
 
 /**
  * Streams an object out without buffering it in memory where the driver supports it (R2).
- * Resolves null when the object does not exist.
+ * Resolves null when the object does not exist. With `range`, only that slice is returned (the caller maps an
+ * unsatisfiable range to 416 by checking `size`).
  */
-export async function getObjectStream(key: string): Promise<StoredObjectStream | null> {
+export async function getObjectStream(key: string, range?: ByteRange): Promise<StoredObjectStream | null> {
   if (key.startsWith("procedural:")) return null;
   if (appConfig.storageDriver === "r2") {
-    const obj = await cfEnv().R2.get(key);
+    const r2Range = !range
+      ? undefined
+      : "suffix" in range
+        ? { suffix: range.suffix }
+        : { offset: range.start, ...(range.end !== undefined ? { length: range.end - range.start + 1 } : {}) };
+    let obj;
+    try {
+      obj = await cfEnv().R2.get(key, r2Range ? { range: r2Range } : undefined);
+    } catch {
+      // A range starting past the end of the object makes R2 throw; surface it as an unsatisfiable range.
+      const head = await cfEnv().R2.head(key);
+      if (!head) return null;
+      return { body: new ReadableStream<Uint8Array>({ start: (c) => c.close() }), size: head.size, range: { start: head.size, end: head.size } };
+    }
     if (!obj) return null;
+    const served = obj.range as { offset?: number; length?: number } | undefined;
     return {
       body: obj.body as unknown as ReadableStream<Uint8Array>,
       contentType: obj.httpMetadata?.contentType,
       size: obj.size,
+      range:
+        range && served && served.offset !== undefined && served.length !== undefined
+          ? { start: served.offset, end: served.offset + served.length - 1 }
+          : undefined,
     };
   }
   let buf: Buffer;
@@ -116,15 +140,27 @@ export async function getObjectStream(key: string): Promise<StoredObjectStream |
   } catch {
     return null;
   }
-  const bytes = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+  const total = buf.byteLength;
+  let slice = new Uint8Array(buf.buffer, buf.byteOffset, total);
+  let served: { start: number; end: number } | undefined;
+  if (range) {
+    const start = "suffix" in range ? Math.max(0, total - range.suffix) : range.start;
+    const end = "suffix" in range ? total - 1 : Math.min(range.end ?? total - 1, total - 1);
+    if (start >= total || end < start) {
+      return { body: new ReadableStream<Uint8Array>({ start: (c) => c.close() }), size: total, range: { start: total, end: total } };
+    }
+    slice = slice.subarray(start, end + 1);
+    served = { start, end };
+  }
   return {
     body: new ReadableStream<Uint8Array>({
       start(controller) {
-        controller.enqueue(bytes);
+        controller.enqueue(slice);
         controller.close();
       },
     }),
-    size: buf.byteLength,
+    size: total,
+    range: served,
   };
 }
 

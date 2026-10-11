@@ -4,7 +4,20 @@ import { prisma } from "./db";
 import { appConfig } from "./config";
 
 const COOKIE = "bt_session";
-const secret = new TextEncoder().encode(appConfig.sessionSecret);
+const DEV_SECRET = "dev-only-change-me";
+
+/**
+ * Resolved lazily (never at import time, so `next build` does not need it). In production a missing, default or
+ * short SESSION_SECRET would let anyone forge a session cookie, so refuse to sign or verify instead.
+ */
+function sessionKey() {
+  const raw = appConfig.sessionSecret;
+  const isProd = process.env.NODE_ENV === "production";
+  if (isProd && (raw === DEV_SECRET || raw.length < 16)) {
+    throw new Error("SESSION_SECRET must be set to a long random value in production");
+  }
+  return new TextEncoder().encode(raw);
+}
 
 export type Session = {
   userId: string;
@@ -17,7 +30,7 @@ export async function createSession(session: Session) {
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime("14d")
-    .sign(secret);
+    .sign(sessionKey());
   const jar = await cookies();
   jar.set(COOKIE, token, {
     httpOnly: true,
@@ -38,7 +51,7 @@ export async function getSession(): Promise<Session | null> {
   const token = jar.get(COOKIE)?.value;
   if (!token) return null;
   try {
-    const { payload } = await jwtVerify(token, secret);
+    const { payload } = await jwtVerify(token, sessionKey(), { algorithms: ["HS256"] });
     if (!payload.userId || !payload.email || !payload.handle) return null;
     return {
       userId: String(payload.userId),

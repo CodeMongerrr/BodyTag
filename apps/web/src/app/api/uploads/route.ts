@@ -3,6 +3,8 @@ import { nanoid } from "nanoid";
 import { putObject, resolveSafeFsPath } from "@/lib/storage";
 import { getSession } from "@/lib/auth";
 import { checkRateLimit } from "@/lib/redis";
+import { clientIp } from "@/lib/http";
+import { sniffImage } from "@/lib/validation";
 
 type UploadRule = {
   maxSize: number;
@@ -67,6 +69,7 @@ const UPLOAD_RULES: Record<string, UploadRule> = {
   },
   proof: {
     maxSize: 8 * 1024 * 1024,
+    requiresAuth: true,
     allowedMimes: {
       "image/png": ["png"],
       "image/jpeg": ["jpg", "jpeg"],
@@ -110,12 +113,17 @@ export async function POST(req: Request) {
   }
 
   const session = await getSession();
-  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "local";
+  const ip = clientIp(req.headers);
   if (!(await checkRateLimit(`ratelimit:upload:${session?.userId ?? ip}`, 30, 60))) {
     return NextResponse.json({ error: "Too many uploads, try again in a minute" }, { status: 429 });
   }
 
-  const form = await req.formData();
+  let form: FormData;
+  try {
+    form = await req.formData();
+  } catch {
+    return NextResponse.json({ error: "Invalid upload" }, { status: 400 });
+  }
   const file = form.get("file");
   if (!(file instanceof File)) return NextResponse.json({ error: "file required" }, { status: 400 });
 
@@ -161,6 +169,11 @@ export async function POST(req: Request) {
   const buf = Buffer.from(await file.arrayBuffer());
   if (rawExt === "glb" && !isGlb(buf)) {
     return NextResponse.json({ error: "Not a binary glTF file" }, { status: 400 });
+  }
+  // Declared type and extension are client-controlled; make sure the bytes really are an image so a bad file
+  // can never break the sharp composites that include every sponsor logo.
+  if (mime.startsWith("image/") && sniffImage(buf) === null) {
+    return NextResponse.json({ error: "File is not a valid PNG, JPEG or WebP image" }, { status: 400 });
   }
   await putObject(key, buf, mime);
 

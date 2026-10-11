@@ -32,7 +32,9 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     if (!bid?.creative?.logoKey) continue;
     try {
       const buf = await getObject(bid.creative.logoKey);
-      zip.file(`logos/${slot.name.replace(/\s+/g, "-")}-${bid.brandName}.png`, buf);
+      const safe = (v: string) => v.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "slot";
+      const ext = bid.creative.logoKey.split(".").pop()?.toLowerCase() ?? "png";
+      zip.file(`logos/${safe(slot.name)}-${safe(bid.brandName)}.${/^[a-z0-9]{2,4}$/.test(ext) ? ext : "png"}`, buf);
     } catch {
       /* skip */
     }
@@ -41,7 +43,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   return new NextResponse(Buffer.from(bytes), {
     headers: {
       "content-type": "application/zip",
-      "content-disposition": `attachment; filename="${campaign.slug}-print-pack.zip"`,
+      "content-disposition": `attachment; filename="${campaign.slug.replace(/[^A-Za-z0-9_-]/g, "")}-print-pack.zip"`,
     },
   });
 }

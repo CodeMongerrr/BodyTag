@@ -15,7 +15,12 @@ export async function GET(req: Request) {
     include: { campaign: { include: { creator: true } } },
   });
   if (!bid) return NextResponse.json({ error: "unknown bid" }, { status: 404 });
-  await settleBid({ bidId: bid.id, paymentId: `mock_${bid.id}` });
+  try {
+    await settleBid({ bidId: bid.id, paymentId: `mock_${bid.id}` });
+  } catch (e) {
+    console.error("mock checkout settle failed:", e);
+    return NextResponse.json({ error: "settlement failed" }, { status: 500 });
+  }
   return NextResponse.redirect(
     `${appConfig.appUrl}/@${bid.campaign.creator.handle}/${bid.campaign.slug}?bid=ok&slot=${bid.slotId}`,
   );

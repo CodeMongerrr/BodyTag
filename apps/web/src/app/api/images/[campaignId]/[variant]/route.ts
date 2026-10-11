@@ -2,9 +2,14 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getObject } from "@/lib/storage";
 import { ensureVariant } from "@/lib/queue";
+import { IMAGE_VARIANTS } from "@bodytag/shared";
 
 export async function GET(req: Request, { params }: { params: Promise<{ campaignId: string; variant: string }> }) {
   const { campaignId, variant } = await params;
+  // Only real variants: the lazy path below creates a job row per unknown (campaign, variant) pair.
+  if (!(IMAGE_VARIANTS as readonly string[]).includes(variant)) {
+    return NextResponse.json({ error: "unknown variant" }, { status: 404 });
+  }
   const done = await prisma.imageJob.findFirst({
     where: { campaignId, variant, status: "done" },
     orderBy: { updatedAt: "desc" },
