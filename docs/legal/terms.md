@@ -1,5 +1,3 @@
 # Terms of Service
 
-See the live page at `/terms`.
-
-BodyTag is software for numbered digital advertising placements. Hosted: BodyTag is host, creator is seller. Brands buy a defined SKU (logo on the live URL). Physical wear is a creator obligation, not a processor SKU. Hosted Stake is prepaid software margin (1% of winning GMV), not escrow. Liability capped at amount paid.
+Source of truth: `apps/web/src/app/terms/page.tsx` (live at `/terms`). Business-only sales; creator-direct payments; takeover credits; hosted Stake is prepaid software credit, not escrow; creator duties (sponsorship disclosure, UAE Advertiser Permit); 15 days' notice of changes. Bump `appConfig.legal.termsVersion` when any legal page changes materially. Research and open items: `docs/compliance/launch-matrix.md`.

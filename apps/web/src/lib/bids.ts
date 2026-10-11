@@ -34,6 +34,7 @@ export async function createBidIntent(input: {
   qrUrl?: string;
   xHandle?: string;
   expectedPriceCents: number;
+  termsVersion?: string;
 }) {
   const brandEmail = String(input.brandEmail ?? "").trim().toLowerCase();
   const brandName = String(input.brandName ?? "").trim();
@@ -141,6 +142,7 @@ export async function createBidIntent(input: {
       amountCents: slot.currentPriceCents,
       currency: campaign.currency,
       expectedPriceCents: input.expectedPriceCents,
+      termsVersion: input.termsVersion,
       returnUrl: `${appConfig.appUrl}/@${campaign.creator.handle}/${campaign.slug}?bid=ok&slot=${slot.id}`,
     });
     await prisma.bid.update({

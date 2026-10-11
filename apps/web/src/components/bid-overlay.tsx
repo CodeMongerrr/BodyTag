@@ -53,6 +53,7 @@ export function BidOverlay({
             xHandle: (form.elements.namedItem("x") as HTMLInputElement).value,
             logoKey: up.key,
             expectedPriceCents: slot.currentPriceCents,
+            acceptedTerms: (form.elements.namedItem("terms") as HTMLInputElement).checked,
           });
           setPending(false);
           if (!result.ok) {
@@ -96,6 +97,15 @@ export function BidOverlay({
         <input name="url" type="url" className="w-full bg-ink p-2" />
         <label className="mt-3 block text-xs uppercase tracking-widest text-muted">X handle</label>
         <input name="x" placeholder="@handle" className="w-full bg-ink p-2" />
+        <label className="mt-4 flex items-start gap-3 text-xs leading-5 text-muted">
+          <input name="terms" type="checkbox" required className="mt-1" />
+          <span>
+            I am buying this advertising placement for business purposes and agree to the{" "}
+            <a href="/terms" className="underline">Terms</a>, <a href="/refund-policy" className="underline">Refund policy</a>{" "}
+            and <a href="/content-policy" className="underline">Content policy</a>. I understand there are no change-of-mind
+            refunds and that a higher takeover bid replaces my placement.
+          </span>
+        </label>
         {error && <p className="mt-3 text-signal">{error}</p>}
         <button disabled={pending} className="mt-5 w-full bg-accent py-3 font-medium text-ink">
           {pending ? "Working…" : `Pay ${formatMoney(slot.currentPriceCents)}`}

@@ -58,6 +58,8 @@ model User {
   processor       String     @default("mock")
   processorPublic String?
   processorSecret String?
+  termsAcceptedAt DateTime?
+  termsVersion    String?
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @updatedAt
   campaigns       Campaign[]

@@ -8,6 +8,7 @@ import { nanoid } from "nanoid";
 import { CampaignTheme, type Prisma } from "@bodytag/db";
 import { DEFAULT_ARENA_SLOTS, defaultArenaConfig, isSafeHttpUrl, slugify, type ArenaConfig } from "@bodytag/shared";
 import { prisma } from "@/lib/db";
+import { appConfig } from "@/lib/config";
 import { clearSession, createSession, requireUser } from "@/lib/auth";
 import { handleAllowed, assertCanPublish, submitKyc } from "@/lib/kyc";
 import { MAX_STAKE_CENTS, canPublish, captureAndRefundStake, depositStake, enforceMargin } from "@/lib/stake";
@@ -36,6 +37,7 @@ export async function registerStateAction(_prev: AuthState, formData: FormData):
   if (!EMAIL_RE.test(email) || email.length > 254 || password.length < 8 || password.length > 128 || name.length > 80 || !name || !handleAllowed(handle)) {
     return { error: "Use a valid email, 8+ character password, and a free handle (letters/numbers)." };
   }
+  if (formData.get("terms") !== "on") return { error: "Accept the Terms, Privacy notice and Content policy to continue." };
   if (!(await allowByIp(await headers(), "register", 10, 3600))) {
     return { error: "Too many sign-ups from this network. Try again later." };
   }
@@ -44,7 +46,14 @@ export async function registerStateAction(_prev: AuthState, formData: FormData):
   let user;
   try {
     user = await prisma.user.create({
-      data: { email, name, handle, passwordHash: await bcrypt.hash(password, 10) },
+      data: {
+        email,
+        name,
+        handle,
+        passwordHash: await bcrypt.hash(password, 10),
+        termsAcceptedAt: new Date(),
+        termsVersion: appConfig.legal.termsVersion,
+      },
     });
   } catch {
     // Unique-constraint race: someone claimed the email/handle between the check above and the insert.
@@ -495,12 +504,16 @@ export async function bidAction(input: {
   url?: string;
   expectedPriceCents: number;
   xHandle?: string;
+  acceptedTerms: boolean;
 }) {
+  if (input.acceptedTerms !== true) {
+    return { ok: false as const, error: "Confirm the business-purchase statement and accept the Terms to continue." };
+  }
   try {
     if (!(await allowByIp(await headers(), "bid", 20, 60))) {
       return { ok: false as const, error: "Too many attempts. Try again in a minute." };
     }
-    const result = await createBidIntent(input);
+    const result = await createBidIntent({ ...input, termsVersion: appConfig.legal.termsVersion });
     return {
       ok: true as const,
       settled: result.settled,

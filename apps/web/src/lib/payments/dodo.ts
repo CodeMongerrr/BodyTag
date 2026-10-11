@@ -1,5 +1,6 @@
 import { appConfig } from "../config";
 import type { BidCheckoutInput, Money, PaymentAdapter } from "./adapter";
+import { dodoPaymentMethods } from "./methods";
 import { MockAdapter } from "./mock";
 
 function getDodoBaseUrl(): string {
@@ -30,6 +31,11 @@ export class DodoAdapter implements PaymentAdapter {
 
   async createBidCheckout(input: BidCheckoutInput) {
     if (!appConfig.dodoApiKey) return this.fallback.createBidCheckout(input);
+    if (this.baseUrl.includes("live.") && !appConfig.allowPlatformCollectedBids) {
+      // Bids are charged with the single platform key, so BodyTag itself would collect brand money. That is not what the
+      // Terms or the Dodo underwriting copy say. Refuse until per-creator processor accounts are wired in.
+      throw new Error("Live Dodo bid checkout is disabled: bids must settle on the creator's own processor account.");
+    }
     const res = await fetch(`${this.baseUrl}/checkouts`, {
       method: "POST",
       headers: this.headers(),
@@ -49,8 +55,9 @@ export class DodoAdapter implements PaymentAdapter {
           bid_id: input.bidId,
           expected_price: String(input.expectedPriceCents),
           brand_email: input.brandEmail,
+          ...(input.termsVersion ? { terms_version: input.termsVersion } : {}),
         },
-        allowed_payment_method_types: ["credit", "debit"],
+        allowed_payment_method_types: dodoPaymentMethods(appConfig.dodoPaymentMethods),
       }),
     });
     if (!res.ok) {

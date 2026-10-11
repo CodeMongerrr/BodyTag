@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import { NextResponse } from "next/server";
 import { BidError, settleBid } from "@/lib/bids";
 import { appConfig } from "@/lib/config";
+import { prisma } from "@/lib/db";
+import { checkPaymentCoversBid } from "@/lib/payments/verify";
 
 function timingSafeEqualStr(a: string, b: string): boolean {
   if (typeof a !== "string" || typeof b !== "string") return false;
@@ -120,8 +122,30 @@ export async function POST(req: Request, { params }: { params: Promise<{ provide
     }
 
     const type = (payload as { type?: string }).type;
-    const meta = (payload as { data?: { metadata?: Record<string, string>; payment_id?: string } }).data;
+    const meta = (
+      payload as {
+        data?: { metadata?: Record<string, string>; payment_id?: string; total_amount?: unknown; currency?: unknown };
+      }
+    ).data;
     if (type === "payment.succeeded" && meta?.metadata?.bid_id) {
+      const bid = await prisma.bid.findUnique({
+        where: { id: meta.metadata.bid_id },
+        include: { campaign: { select: { currency: true } } },
+      });
+      if (bid) {
+        const check = checkPaymentCoversBid(
+          { totalAmount: meta.total_amount, currency: meta.currency },
+          { amountCents: bid.amountCents, currency: bid.campaign.currency },
+        );
+        if (!check.ok) {
+          // 200 so Dodo stops retrying; the bid stays in `intent` for an operator to refund or reconcile.
+          console.error("dodo webhook: payment does not cover bid", { bidId: bid.id, paymentId: meta.payment_id, reason: check.reason });
+          return NextResponse.json({ received: true, settled: false, reason: check.reason });
+        }
+        if (check.converted) {
+          console.warn("dodo webhook: payment currency differs from campaign currency", { bidId: bid.id, paymentId: meta.payment_id });
+        }
+      }
       await settleFromWebhook(meta.metadata.bid_id, meta.payment_id ?? "dodo");
     }
     return NextResponse.json({ received: true });
