@@ -18,6 +18,14 @@ export function AuthForm({ mode }: { mode: "in" | "up" }) {
           <input name="name" required className="mt-1 w-full border border-line bg-ink p-3" />
           <label className="mt-4 block text-xs uppercase tracking-widest text-muted">Handle</label>
           <input name="handle" required pattern="[a-z0-9_]{3,24}" className="mt-1 w-full border border-line bg-ink p-3" />
+          <label className="mt-5 flex items-start gap-3 text-xs leading-5 text-muted">
+            <input name="terms" type="checkbox" required className="mt-1" />
+            <span>
+              I am 18 or older and agree to the <a href="/terms" className="underline">Terms</a>,{" "}
+              <a href="/privacy" className="underline">Privacy notice</a> and{" "}
+              <a href="/content-policy" className="underline">Content policy</a>.
+            </span>
+          </label>
         </>
       )}
       <label className="mt-4 block text-xs uppercase tracking-widest text-muted">Email</label>

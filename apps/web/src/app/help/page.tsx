@@ -19,8 +19,9 @@ export default function HelpPage() {
         </p>
         <h2 className="text-2xl">Refund timing</h2>
         <p>
-          Outbid: wallet credit immediately. Withdrawal to card: within the processor window (Dodo 30 days). Event cancelled:
-          the creator refunds on their processor. Content-policy violations are forfeit.
+          Outbid: credit immediately. Refund to your original payment method on request or after 30 idle days, inside the
+          processor’s refund window. Event cancelled: the creator refunds you or offers equivalent content. Removed for a
+          Content-policy breach: not refunded, unless the removal was our error. Full details in the Refund policy.
         </p>
         <h2 className="text-2xl">Stake (hosted only)</h2>
         <p>

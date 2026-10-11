@@ -8,7 +8,7 @@ Open-source engine for **walking-billboard** sponsorship campaigns. A creator ma
 - **Self-host:** `HOSTED_FEE_BPS=0`. You pay your own Postgres, Redis, CDN, and workers. BodyTag takes nothing.
 - **Official hosted instance:** `HOSTED_FEE_BPS=100` (1.00% of **winning GMV**). That 1% is taken from the creator **Stake** after event proof. Leftover Stake is refunded. Arena hosting and image generation are **not billed**.
 
-Stake is a **prepaid hosted-service margin**, not escrow of brand bid money. Brands pay the **creator's** processor (Dodo / Stripe / Razorpay). See [docs/dodo-compliance.md](docs/dodo-compliance.md).
+Stake is a **prepaid hosted-service margin**, not escrow of brand bid money. Brands pay the **creator's** processor (Dodo / Stripe / Razorpay). See [docs/dodo-compliance.md](docs/dodo-compliance.md). Launch readiness for the US, EU, India and UAE (payment methods, open blockers, legal checklist): [docs/compliance/launch-matrix.md](docs/compliance/launch-matrix.md).
 
 ## Repo
 

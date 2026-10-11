@@ -259,6 +259,7 @@ type IngestStep = "idle" | "downloading" | "uploading" | "attaching" | "done";
 /** The arena body: Avaturn avatar built from the creator's selfies, or a hand-uploaded GLB, else the procedural mannequin. */
 function BodyPanel({ campaignId, slots, surfaces }: { campaignId: string; slots: Slot[]; surfaces: Surface[] }) {
   const [scanning, setScanning] = useState(false);
+  const [faceConsent, setFaceConsent] = useState(false);
   const [step, setStep] = useState<IngestStep>("idle");
   const [error, setError] = useState<string | null>(null);
   // Kept so a failed upload can be retried without re-scanning (the export URL is short-lived, but not that short).
@@ -306,6 +307,7 @@ function BodyPanel({ campaignId, slots, surfaces }: { campaignId: string; slots:
           className="bg-accent px-4 py-2 font-medium text-ink disabled:opacity-50"
           onClick={() => {
             setError(null);
+            setFaceConsent(false);
             setScanning((v) => !v);
           }}
         >
@@ -319,7 +321,17 @@ function BodyPanel({ campaignId, slots, surfaces }: { campaignId: string; slots:
             Sign in to Avaturn inside the frame, scan your face (front + both sides), pick a body and outfit, then press <strong>Next</strong>.
             The exported avatar is stored on this server and attached as the arena body.
           </p>
-          <AvaturnEmbed onExport={ingest} onError={(e) => setError(`${e.type}${e.message ? `: ${e.message}` : ""}`)} />
+          <label className="flex items-start gap-3 text-xs leading-5 text-muted">
+            <input type="checkbox" checked={faceConsent} onChange={(e) => setFaceConsent(e.target.checked)} className="mt-1" />
+            <span>
+              I consent to BodyTag storing and publicly showing the 3D avatar made from my face and body scan for this campaign,
+              and to Avaturn processing my photos under its own terms. I am scanning myself, or someone who gave me written
+              consent. See the <a href="/privacy" className="underline">Privacy notice</a>.
+            </span>
+          </label>
+          {faceConsent && (
+            <AvaturnEmbed onExport={ingest} onError={(e) => setError(`${e.type}${e.message ? `: ${e.message}` : ""}`)} />
+          )}
         </>
       )}
 

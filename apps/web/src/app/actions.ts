@@ -8,6 +8,7 @@ import { nanoid } from "nanoid";
 import { CampaignTheme, type Prisma } from "@bodytag/db";
 import { DEFAULT_ARENA_SLOTS, defaultArenaConfig, slugify } from "@bodytag/shared";
 import { prisma } from "@/lib/db";
+import { appConfig } from "@/lib/config";
 import { clearSession, createSession, requireUser } from "@/lib/auth";
 import { handleAllowed, assertCanPublish, submitKyc } from "@/lib/kyc";
 import { canPublish, captureAndRefundStake, depositStake, enforceMargin } from "@/lib/stake";
@@ -26,10 +27,18 @@ export async function registerStateAction(_prev: AuthState, formData: FormData):
   if (!email || password.length < 8 || !name || !handleAllowed(handle)) {
     return { error: "Use a valid email, 8+ character password, and a free handle (letters/numbers)." };
   }
+  if (formData.get("terms") !== "on") return { error: "Accept the Terms, Privacy notice and Content policy to continue." };
   const exists = await prisma.user.findFirst({ where: { OR: [{ email }, { handle }] } });
   if (exists) return { error: "Email or handle already taken." };
   const user = await prisma.user.create({
-    data: { email, name, handle, passwordHash: await bcrypt.hash(password, 10) },
+    data: {
+      email,
+      name,
+      handle,
+      passwordHash: await bcrypt.hash(password, 10),
+      termsAcceptedAt: new Date(),
+      termsVersion: appConfig.legal.termsVersion,
+    },
   });
   await createSession({ userId: user.id, email: user.email, handle: user.handle });
   redirect("/dashboard");
@@ -363,9 +372,13 @@ export async function bidAction(input: {
   url?: string;
   expectedPriceCents: number;
   xHandle?: string;
+  acceptedTerms: boolean;
 }) {
+  if (input.acceptedTerms !== true) {
+    return { ok: false as const, error: "Confirm the business-purchase statement and accept the Terms to continue." };
+  }
   try {
-    const result = await createBidIntent(input);
+    const result = await createBidIntent({ ...input, termsVersion: appConfig.legal.termsVersion });
     return {
       ok: true as const,
       settled: result.settled,

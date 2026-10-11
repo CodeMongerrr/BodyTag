@@ -13,6 +13,11 @@ export const appConfig = {
   dodoWebhookSecret: process.env.DODO_WEBHOOK_SECRET ?? "",
   stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET ?? "",
   dodoEnv: process.env.DODO_ENVIRONMENT ?? "test_mode",
+  // Comma-separated Dodo payment_method_types shown at checkout. Empty = launch defaults (see lib/payments/methods.ts).
+  dodoPaymentMethods: process.env.DODO_PAYMENT_METHODS ?? "",
+  // Live-mode bids on the single platform Dodo key mean BodyTag collects brand money, which contradicts the Terms and
+  // Dodo's underwriting copy (docs/dodo-compliance.md). Keep false until bids settle on creator-owned accounts.
+  allowPlatformCollectedBids: process.env.ALLOW_PLATFORM_COLLECTED_BIDS === "true",
   redisUrl: process.env.REDIS_URL ?? "redis://localhost:6379",
   databaseUrl: process.env.DATABASE_URL ?? "",
   storageDriver: (process.env.STORAGE_DRIVER ?? "fs") as "fs" | "s3" | "r2",
@@ -29,6 +34,17 @@ export const appConfig = {
   supportEmail: process.env.SUPPORT_EMAIL ?? "support@bodytag.app",
   creatorsEmail: process.env.CREATORS_EMAIL ?? "creators@bodytag.app",
   crispId: process.env.CRISP_WEBSITE_ID ?? "",
+  // Identity shown on /terms and /privacy. Self-host operators must set their own; unset values render as visible placeholders.
+  legal: {
+    termsVersion: "2026-10-11",
+    entityName: process.env.LEGAL_ENTITY_NAME ?? "",
+    entityAddress: process.env.LEGAL_ENTITY_ADDRESS ?? "",
+    governingLaw: process.env.LEGAL_GOVERNING_LAW ?? "",
+    privacyEmail: process.env.PRIVACY_EMAIL ?? process.env.CREATORS_EMAIL ?? "creators@bodytag.app",
+    grievanceOfficerName: process.env.GRIEVANCE_OFFICER_NAME ?? "",
+    grievanceOfficerEmail: process.env.GRIEVANCE_OFFICER_EMAIL ?? "",
+    euRepresentative: process.env.EU_REPRESENTATIVE ?? "",
+  },
 };
 
 export function isHosted() {

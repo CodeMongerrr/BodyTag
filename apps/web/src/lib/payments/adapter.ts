@@ -9,6 +9,8 @@ export type BidCheckoutInput = {
   currency: string;
   returnUrl: string;
   expectedPriceCents: number;
+  /** Terms version the brand accepted at checkout; stored on the processor payment as dispute evidence. */
+  termsVersion?: string;
 };
 
 export interface PaymentAdapter {
